@@ -1,0 +1,35 @@
+# Секреты
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+*.key
+kubeconfig*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Генерируемое
+*_pb2.py
+*_pb2.pyi
+*_pb2_grpc.py
+load/reports/

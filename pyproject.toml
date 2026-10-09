@@ -1,0 +1,63 @@
+[project]
+name = "orders-platform-workspace"
+version = "0.1.0"
+description = "Event-Driven Order Processing Platform — корень uv workspace"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "pip-audit>=2.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/*", "*-service", "api-gateway"]
+
+# ---------- ruff ----------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Исключения действуют и при запуске ruff с явным путём к файлу
+force-exclude = true
+extend-exclude = [
+    "**/*_pb2.py",
+    "**/*_pb2.pyi",
+    "**/*_pb2_grpc.py",
+    "**/alembic/versions",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "DTZ", "RUF"]
+# Комментарии и тексты на русском — кириллица ожидаема
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+# Код сервиса импортируется как `src.*`
+known-first-party = ["src", "events", "platform_lib"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+
+# ---------- mypy ----------
+# Запуск по каждому пакету из его каталога (`make typecheck`):
+# у всех сервисов корневой пакет называется `src`, вместе их проверять нельзя.
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["confluent_kafka.*", "motor.*", "grpc.*", "grpc_health.*"]
+ignore_missing_imports = true
+
+# Правила слоёв (import-linter) — в pyproject.toml каждого сервиса.
