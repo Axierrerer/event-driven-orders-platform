@@ -9,6 +9,13 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6",
+    "pydantic[email]>=2.9,<3",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    "pyjwt[crypto]>=2.10",
+    "pwdlib[argon2]>=0.2",
 ]
 
 [tool.uv]
@@ -36,9 +43,16 @@ name = "api/ не ходит в repositories/ напрямую"
 type = "forbidden"
 source_modules = ["src.api"]
 forbidden_modules = ["src.repositories"]
+# Цепочка api → services → repositories разрешена; запрещён только прямой импорт
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "domain/ не зависит от I/O-слоёв"
 type = "forbidden"
 source_modules = ["src.domain"]
 forbidden_modules = ["src.api", "src.services", "src.repositories"]
+
+[tool.coverage.run]
+# SQLAlchemy async выполняет код в greenlet, to_thread — в потоках
+concurrency = ["greenlet", "thread"]
+omit = ["src/worker.py"]  # точка входа фонового процесса, проверяется на стенде

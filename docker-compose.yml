@@ -192,9 +192,27 @@ services:
   auth-service:
     <<: *service-defaults
     build: { context: ., dockerfile: auth-service/Dockerfile }
-    environment:
+    environment: &auth-env
       <<: *service-env
       DATABASE_URL: postgresql+asyncpg://auth:${AUTH_DB_PASSWORD:-local-dev-auth}@postgres:5432/auth
+      APP_BASE_URL: http://localhost:${GATEWAY_HOST_PORT:-8000}
+    volumes:
+      - auth-keys:/var/lib/auth/keys
+
+  auth-worker:
+    build: { context: ., dockerfile: auth-service/Dockerfile }
+    command: ["python", "-m", "src.worker"]
+    environment: *auth-env
+    restart: unless-stopped
+    healthcheck: &worker-healthcheck
+      test: ["CMD", "python", "-m", "platform_lib.heartbeat", "/tmp/worker.alive", "60"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      auth-service:
+        condition: service_healthy
 
   user-service:
     <<: *service-defaults
@@ -250,6 +268,7 @@ services:
       - "127.0.0.1:${GATEWAY_HOST_PORT:-8000}:8000"
 
 volumes:
+  auth-keys:
   postgres-data:
   mongo-data:
   redis-data:

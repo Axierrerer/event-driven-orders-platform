@@ -36,9 +36,16 @@ name = "api/ не ходит в repositories/ напрямую"
 type = "forbidden"
 source_modules = ["src.api"]
 forbidden_modules = ["src.repositories"]
+# Цепочка api → services → repositories разрешена; запрещён только прямой импорт
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "domain/ не зависит от I/O-слоёв"
 type = "forbidden"
 source_modules = ["src.domain"]
 forbidden_modules = ["src.api", "src.services", "src.repositories"]
+
+[tool.coverage.run]
+# SQLAlchemy async выполняет код в greenlet, to_thread — в потоках
+concurrency = ["greenlet", "thread"]
+omit = ["src/worker.py"]  # точка входа фонового процесса, проверяется на стенде

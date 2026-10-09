@@ -12,10 +12,14 @@ FROM python:3.12-slim-bookworm
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=builder /app/.venv /app/.venv
 WORKDIR /app/service
+COPY auth-service/alembic.ini ./alembic.ini
+COPY auth-service/migrations ./migrations
 COPY auth-service/src ./src
+# Каталог ключа подписи JWT (в compose — именованный том, в k8s — Secret)
+RUN mkdir -p /var/lib/auth/keys && chown app:app /var/lib/auth/keys
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8001
 USER app
 EXPOSE 8001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health/live', timeout=2)"
-CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port $PORT --proxy-headers"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn src.main:create_app --factory --host 0.0.0.0 --port $PORT --proxy-headers"]
