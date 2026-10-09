@@ -20,6 +20,8 @@ ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
 ADMIN_PASSWORD = os.environ.get("SEED_ADMIN_PASSWORD", "local-dev-admin-passphrase")
 MANAGER_EMAIL = "manager@example.com"
 MANAGER_PASSWORD = os.environ.get("SEED_MANAGER_PASSWORD", "local-dev-manager-passphrase")
+# Самоподписанный сертификат ingress в k3d: SEED_TLS_VERIFY=0
+TLS_VERIFY = os.environ.get("SEED_TLS_VERIFY", "1") != "0"
 STOCK_PER_PRODUCT = 50
 
 CATALOG: dict[str, list[tuple[str, str, str]]] = {
@@ -61,29 +63,52 @@ def log(message: str) -> None:
 
 
 def create_user(email: str, password: str) -> None:
-    """Пользователь с подтверждённым email через CLI auth-service (идемпотентно)."""
-    result = subprocess.run(  # noqa: S603 — фиксированная команда без пользовательского ввода
-        [  # noqa: S607
-            "docker",
-            "compose",
+    """Пользователь с подтверждённым email через CLI auth-service (идемпотентно).
+
+    SEED_TARGET=k8s — через kubectl exec в кластере; пароль передаётся через stdin.
+    """
+    if os.environ.get("SEED_TARGET") == "k8s":
+        namespace = os.environ.get("NAMESPACE", "orders")
+        command = [
+            "kubectl",
             "exec",
-            "-T",
-            "-e",
-            "NEW_USER_PASSWORD",
-            "auth-service",
-            "python",
-            "-m",
-            "src.cli",
-            "create-user",
-            "--email",
+            "-i",
+            "-n",
+            namespace,
+            "deploy/auth-service",
+            "--",
+            "sh",
+            "-c",
+            "read -r NEW_USER_PASSWORD && export NEW_USER_PASSWORD && "
+            'exec python -m src.cli create-user --email "$0" --verified',
             email,
-            "--verified",
-        ],
-        env={**os.environ, "NEW_USER_PASSWORD": password},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+        ]
+        result = subprocess.run(  # noqa: S603 — фиксированная команда без пользовательского ввода
+            command, input=password + "\n", capture_output=True, text=True, check=False
+        )
+    else:
+        result = subprocess.run(  # noqa: S603 — фиксированная команда без пользовательского ввода
+            [  # noqa: S607
+                "docker",
+                "compose",
+                "exec",
+                "-T",
+                "-e",
+                "NEW_USER_PASSWORD",
+                "auth-service",
+                "python",
+                "-m",
+                "src.cli",
+                "create-user",
+                "--email",
+                email,
+                "--verified",
+            ],
+            env={**os.environ, "NEW_USER_PASSWORD": password},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     if result.returncode != 0:
         sys.exit(f"cannot create {email}: {result.stderr.strip() or result.stdout.strip()}")
 
@@ -118,7 +143,8 @@ def bearer(token: str) -> dict[str, str]:
 def wait_for_profile(client: httpx.Client, admin: str, email: str) -> str:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        found = client.get(f"{API}/users", params={"email": email}, headers=bearer(admin)).json()
+        response = client.get(f"{API}/users", params={"email": email}, headers=bearer(admin))
+        found = response.json() if response.status_code == 200 else []
         if found:
             return str(found[0]["id"])
         time.sleep(1)
@@ -173,7 +199,7 @@ def ensure_stock(client: httpx.Client, admin: str, product_id: str) -> None:
 
 
 def main() -> None:
-    with httpx.Client(timeout=10) as client:
+    with httpx.Client(timeout=10, verify=TLS_VERIFY) as client:
         create_user(ADMIN_EMAIL, ADMIN_PASSWORD)
         admin = token_with_role(client, ADMIN_EMAIL, ADMIN_PASSWORD, "ROLE_ADMIN")
         log(f"admin {ADMIN_EMAIL}")

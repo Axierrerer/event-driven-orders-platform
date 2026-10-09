@@ -1,0 +1,28 @@
+apiVersion: v2
+name: platform
+description: Orders platform services, ingress and TLS (infrastructure is a separate release, chart infra)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: auth-service
+    version: 0.1.0
+    repository: file://../auth-service
+  - name: user-service
+    version: 0.1.0
+    repository: file://../user-service
+  - name: product-service
+    version: 0.1.0
+    repository: file://../product-service
+  - name: inventory-service
+    version: 0.1.0
+    repository: file://../inventory-service
+  - name: order-service
+    version: 0.1.0
+    repository: file://../order-service
+  - name: notification-service
+    version: 0.1.0
+    repository: file://../notification-service
+  - name: api-gateway
+    version: 0.1.0
+    repository: file://../api-gateway

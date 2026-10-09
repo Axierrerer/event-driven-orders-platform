@@ -27,7 +27,7 @@
 | Observability: трейсы (OpenTelemetry → Jaeger), метрики (Prometheus), логи (Loki), дашборды Grafana, алерты | ✅ готово |
 | Тестовые данные, сквозные сценарии, нагрузочный тест | ✅ готово |
 | Безопасность: скан зависимостей, секретов и образов, матрица доступа, OWASP ZAP | ✅ готово |
-| Kubernetes (k3d + Helm) | ⏳ в планах |
+| Kubernetes (k3d + Helm), sealed-secrets, ingress с TLS 1.3 | ✅ готово |
 
 ---
 
@@ -38,6 +38,7 @@
 - [Структура репозитория](#структура-репозитория)
 - [Быстрый старт](#быстрый-старт)
 - [Как пользоваться стендом](#как-пользоваться-стендом)
+- [Kubernetes](#kubernetes)
 - [Разработка](#разработка)
 - [Правила кода](#правила-кода)
 - [Работа с git](#работа-с-git)
@@ -131,7 +132,7 @@ stateDiagram-v2
 | Аутентификация | JWT RS256 + JWKS (PyJWT), Argon2id (pwdlib) |
 | Зависимости | uv (workspace, единый `uv.lock`) |
 | Качество | ruff (линтер и форматирование), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
-| Инфраструктура | Docker, docker-compose, Nginx; Kubernetes (k3d) и Helm — в планах |
+| Инфраструктура | Docker, docker-compose, Nginx; Kubernetes (k3d), Helm, cert-manager, sealed-secrets |
 | Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Loki, Grafana Alloy |
 | Почта (локально) | Mailpit |
 
@@ -145,6 +146,8 @@ stateDiagram-v2
 ├── uv.lock                     # единый lock-файл зависимостей
 ├── Makefile                    # все рабочие команды (make help)
 ├── docker-compose.yml          # локальный стенд
+├── deploy/helm/                # Helm-чарты: service-lib, <service>, platform, infra
+├── .secrets.example/           # структура локальных секретов для make inject-secrets
 ├── nginx/nginx.conf            # публичная точка входа: reverse proxy + балансировщик
 ├── observability/             # Collector, Prometheus (+ алерты), Loki/Alloy, Grafana
 ├── proto/                      # .proto внутренних gRPC API
@@ -191,7 +194,7 @@ stateDiagram-v2
 | Docker Desktop / OrbStack / Colima | Engine ≥ 25, Compose v2 | локальный стенд, testcontainers |
 | GNU Make | ≥ 3.81 | команды проекта |
 | git | ≥ 2.40 | — |
-| k3d, kubectl, helm, kubeseal, trivy, grpcurl | актуальные | Kubernetes и сканирование (следующие этапы) |
+| k3d, kubectl, helm, kubeseal, trivy, grpcurl | актуальные | Kubernetes и проверки безопасности |
 
 **macOS:**
 
@@ -445,6 +448,54 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 docker compose exec postgres psql -U postgres -d auth   # базы: auth, users, inventory, orders
 docker compose exec mongo mongosh catalog
 ```
+
+---
+
+## Kubernetes
+
+Те же образы запускаются в локальном Kubernetes (k3d) через Helm. Перед этим остановите
+compose-стенд (`make dev-down`): вместе им обычно не хватает памяти Docker Desktop.
+
+```bash
+make k3d-up               # кластер + cert-manager + sealed-secrets + образы + секреты + чарты
+curl -k https://api.orders.localhost/health/ready
+make k3d-zero-downtime    # нагрузка 50 RPS, order-service ×4 и обновление образов
+make helm-check           # helm lint + helm template | kubeconform для всех чартов
+make k3d-down             # удалить кластер и registry
+```
+
+Что делает `make k3d-up` (повторный запуск обновляет уже развёрнутое):
+
+1. Создаёт кластер k3d `orders` (1 server + 2 agents) с registry `k3d-registry.localhost:5050`
+   (порт 5000 на macOS занят AirPlay) и портами 80/443.
+2. Ставит cert-manager и контроллер sealed-secrets.
+3. Собирает образы сервисов и пушит их с тегом текущего коммита.
+4. `make inject-secrets`: каждый `.secrets/dev/<name>.env` и `.secrets/dev/<name>/` превращается
+   в SealedSecret `<name>` (`kubectl create --dry-run | kubeseal | kubectl apply`). При первом
+   запуске `.secrets/dev` создаётся из `.secrets.example/dev` со случайными паролями и новым
+   ключом подписи JWT. `.secrets/` в git не попадает; в values — только имена секретов.
+5. Релиз `infra`: PostgreSQL, MongoDB (replica set), Redis, Kafka (KRaft), Schema Registry, Mailpit.
+6. Релиз `platform`: сервисы, воркеры, миграции, ingress и TLS.
+
+Чарты (`deploy/helm/`):
+
+| Чарт | Что внутри |
+|------|------------|
+| `service-lib` | library chart: Deployment (API), Deployment воркера, Service, HPA, PDB, Job миграций, ServiceMonitor |
+| `<service>` | тонкий чарт сервиса: `values.yaml` + зависимость от `service-lib` |
+| `platform` | umbrella-чарт: все сервисы, ingress Traefik с TLS 1.3, заголовки безопасности, регистрация схем; `values-dev.yaml`, `values-prod.yaml` |
+| `infra` | инфраструктура локального кластера |
+
+Каждый API-Deployment: rolling update `maxUnavailable: 0, maxSurge: 1`, HPA 2–4 реплики по
+CPU 70% (в dev 1–4), PDB `minAvailable: 1`, readiness `/health/ready`, liveness `/health/live`,
+`preStop` sleep 5 с и graceful shutdown uvicorn, non-root, корневая ФС только для чтения,
+все capabilities сброшены. Воркеры (outbox relay + consumer'ы) — отдельные Deployment'ы того же
+образа; миграции — Job с хуком Helm `pre-install,pre-upgrade` (`alembic upgrade head`).
+
+Ingress `https://api.orders.localhost` принимает только TLS 1.3 (клиент с TLS 1.2 отклоняется),
+сертификат выпускает самоподписанный CA cert-manager, в ответах есть
+`Strict-Transport-Security`, `X-Content-Type-Options` и нет заголовка `Server`.
+Результат `make k3d-zero-downtime` на ноутбуке: 8970 запросов при 50 RPS, 0 ошибок, 0 ответов 5xx.
 
 ---
 

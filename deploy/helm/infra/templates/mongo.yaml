@@ -1,0 +1,78 @@
+# Headless-сервис: член replica set называется mongo-0.mongo, клиенты подключаются через mongo
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+spec:
+  clusterIP: None
+  selector: { app: mongo }
+  ports:
+    - port: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels: { app: mongo }
+  template:
+    metadata:
+      labels: { app: mongo }
+    spec:
+      containers:
+        - name: mongo
+          image: {{ .Values.mongo.image }}
+          args: ["--replSet", "rs0", "--bind_ip_all"]
+          ports:
+            - containerPort: 27017
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 768Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.mongo.storage }}
+---
+# Инициализация replica set из одного узла (нужен для транзакций outbox)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-init
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 30
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: {{ .Values.mongo.image }}
+          command:
+            - mongosh
+            - --host
+            - mongo-0.mongo:27017
+            - --quiet
+            - --eval
+            - >-
+              try { rs.status() } catch (e) {
+                rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo-0.mongo:27017'}]})
+              };
+              for (let i = 0; i < 60 && !db.hello().isWritablePrimary; i++) { sleep(1000) };
+              if (!db.hello().isWritablePrimary) { quit(1) }

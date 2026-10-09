@@ -1,0 +1,21 @@
+# Общие значения для всех сервисов (передаются в подчарты как global)
+global:
+  image:
+    registry: k3d-registry.localhost:5050
+    tag: latest
+  secretName: platform-secrets
+  environment: k8s
+  logLevel: INFO
+  kafkaBootstrap: kafka:9092
+  schemaRegistryUrl: http://schema-registry:8081
+  otlpEndpoint: ""
+
+ingress:
+  host: api.orders.localhost
+  tlsSecretName: api-orders-tls
+  # HSTS ставит ingress: TLS терминируется здесь
+  hstsSeconds: 31536000
+
+# Регистрация JSON Schema событий до запуска сервисов
+schemaInit:
+  enabled: true

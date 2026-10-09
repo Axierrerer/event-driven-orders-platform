@@ -1,0 +1,6 @@
+dependencies:
+- name: service-lib
+  repository: file://../service-lib
+  version: 0.1.0
+digest: sha256:894c69f846acee1f90f368ccef5719fd5d9974d24d0fa9d7c1e1613e8d5a1169
+generated: "2026-10-10T00:34:30.502921+03:00"

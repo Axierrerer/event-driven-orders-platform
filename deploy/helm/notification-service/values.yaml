@@ -1,0 +1,39 @@
+# Значения по умолчанию (prod-подобные); окружения переопределяют их в platform/values-*.yaml
+global:
+  image: { registry: k3d-registry.localhost:5050, tag: latest }
+  secretName: platform-secrets
+  environment: k8s
+  logLevel: INFO
+  kafkaBootstrap: kafka:9092
+  schemaRegistryUrl: http://schema-registry:8081
+  otlpEndpoint: ""
+
+image:
+  tag: ""  # пусто — global.image.tag
+port: 8006
+grpcPort: null
+replicas: 2
+hpa: { enabled: true, minReplicas: 2, maxReplicas: 4, cpuUtilization: 70 }
+pdb: { minAvailable: 1 }
+resources:
+  requests: { cpu: 100m, memory: 160Mi }
+  limits: { cpu: '1', memory: 384Mi }
+migrations: { enabled: false }
+worker:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 320Mi }
+serviceMonitor: { enabled: true }
+# Секреты — только имена ключей Secret (создаёт make inject-secrets)
+secretEnv:
+  - REDIS_PASSWORD
+env:
+  MONGO_URL: "mongodb://mongo:27017/?replicaSet=rs0"
+  MONGO_DB: "notifications"
+  AUTH_JWKS_URL: "http://auth-service:8001/api/v1/auth/.well-known/jwks.json"
+  SMTP_HOST: "mailpit"
+  SMTP_PORT: "1025"
+volumes: []
+volumeMounts: []

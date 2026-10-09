@@ -15,6 +15,8 @@ ADMIN_PASSWORD = os.environ.get("SEED_ADMIN_PASSWORD", "local-dev-admin-passphra
 QUERIES = ["чайник", "чашка", "плед", "нож", "ваза", "свеча", "корзина", "банка"]
 # Каждый пользователь делает ~5 запросов в секунду: 100 пользователей ≈ 500 RPS
 RPS_PER_USER = float(os.environ.get("LOAD_RPS_PER_USER", "5"))
+# Самоподписанный сертификат ingress в k3d: LOAD_TLS_VERIFY=0
+TLS_VERIFY = os.environ.get("LOAD_TLS_VERIFY", "1") != "0"
 
 PRODUCTS: list[str] = []
 TOKEN: dict[str, str] = {}
@@ -26,7 +28,7 @@ def prepare(environment, **_kwargs):  # type: ignore[no-untyped-def]
     import httpx
 
     host = environment.host
-    with httpx.Client(base_url=host, timeout=10) as client:
+    with httpx.Client(base_url=host, timeout=10, verify=TLS_VERIFY) as client:
         page = client.get("/api/v1/products", params={"limit": 100}).json()
         PRODUCTS.extend(p["id"] for p in page["items"])
         login = client.post(
@@ -39,6 +41,7 @@ def prepare(environment, **_kwargs):  # type: ignore[no-untyped-def]
 
 
 class Shopper(FastHttpUser):
+    insecure = not TLS_VERIFY
     wait_time = constant_throughput(RPS_PER_USER)
 
     @task(80)

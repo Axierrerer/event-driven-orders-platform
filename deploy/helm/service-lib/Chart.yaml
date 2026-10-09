@@ -1,0 +1,5 @@
+apiVersion: v2
+name: service-lib
+description: Shared templates for platform services (Deployment, Service, HPA, PDB, worker, migrations, ServiceMonitor)
+type: library
+version: 0.1.0
