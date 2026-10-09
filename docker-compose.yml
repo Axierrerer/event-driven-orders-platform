@@ -1,0 +1,243 @@
+# Локальный стенд.
+# Все значения имеют dev-умолчания, поэтому `make dev-up` работает без .env;
+# .env (если есть) переопределяет их. Инфраструктура слушает только 127.0.0.1.
+
+name: orders-platform
+
+x-service-env: &service-env
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  KAFKA_BOOTSTRAP: kafka:9092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
+  REDIS_URL: redis://:${REDIS_PASSWORD:-local-dev-redis}@redis:6379/0
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  depends_on: &infra-deps
+    postgres-init:
+      condition: service_completed_successfully
+    mongo:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+    schema-registry:
+      condition: service_healthy
+    kafka-init:
+      condition: service_completed_successfully
+
+services:
+  # ---------------- инфраструктура ----------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-local-dev-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/scripts/postgres-init-databases.sh"]
+    environment:
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-local-dev-only}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-local-dev-auth}
+      USERS_DB_PASSWORD: ${USERS_DB_PASSWORD:-local-dev-users}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:-local-dev-inventory}
+      ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:-local-dev-orders}
+    volumes:
+      - ./scripts/postgres-init-databases.sh:/scripts/postgres-init-databases.sh:ro
+    restart: "no"
+
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
+    healthcheck:
+      # Инициирует replica set из одного узла при первом запуске (нужен для транзакций outbox)
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status() } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]}) }; if (!db.hello().isWritablePrimary) { quit(1) }"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local-dev-redis}", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-local-dev-redis}
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_HOST_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "127.0.0.1:${KAFKA_HOST_PORT:-9094}:9094"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/scripts/kafka-create-topics.sh"]
+    volumes:
+      - ./scripts/kafka-create-topics.sh:/scripts/kafka-create-topics.sh:ro
+    restart: "no"
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.7.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+    ports:
+      - "127.0.0.1:${SCHEMA_REGISTRY_HOST_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    profiles: ["tools"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    ports:
+      - "127.0.0.1:8088:8080"
+
+  # ---------------- сервисы ----------------
+  auth-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: auth-service/Dockerfile }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql+asyncpg://auth:${AUTH_DB_PASSWORD:-local-dev-auth}@postgres:5432/auth
+
+  user-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: user-service/Dockerfile }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql+asyncpg://users:${USERS_DB_PASSWORD:-local-dev-users}@postgres:5432/users
+
+  product-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: product-service/Dockerfile }
+    environment:
+      <<: *service-env
+      MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+      MONGO_DB: catalog
+
+  inventory-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: inventory-service/Dockerfile }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql+asyncpg://inventory:${INVENTORY_DB_PASSWORD:-local-dev-inventory}@postgres:5432/inventory
+
+  order-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: order-service/Dockerfile }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql+asyncpg://orders:${ORDERS_DB_PASSWORD:-local-dev-orders}@postgres:5432/orders
+
+  notification-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: notification-service/Dockerfile }
+    environment:
+      <<: *service-env
+      MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+      MONGO_DB: notifications
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+
+  api-gateway:
+    <<: *service-defaults
+    build: { context: ., dockerfile: api-gateway/Dockerfile }
+    environment:
+      <<: *service-env
+      AUTH_SERVICE_URL: http://auth-service:8001
+      USER_SERVICE_URL: http://user-service:8002
+      PRODUCT_SERVICE_URL: http://product-service:8003
+      INVENTORY_SERVICE_URL: http://inventory-service:8004
+      ORDER_SERVICE_URL: http://order-service:8005
+      NOTIFICATION_SERVICE_URL: http://notification-service:8006
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-8000}:8000"
+
+volumes:
+  postgres-data:
+  mongo-data:
+  redis-data:
+  kafka-data:

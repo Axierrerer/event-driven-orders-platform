@@ -1,0 +1,44 @@
+[project]
+name = "auth-service"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "events",
+    "platform-lib",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6",
+]
+
+[tool.uv]
+# Код сервиса не устанавливается пакетом: импортируется как `src.*` из каталога сервиса
+package = false
+
+[tool.uv.sources]
+events = { workspace = true }
+platform-lib = { workspace = true }
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["unit", "integration"]
+addopts = "--cov=src --cov-report=term-missing"
+
+[tool.importlinter]
+root_packages = ["src"]
+
+[[tool.importlinter.contracts]]
+name = "api/ не ходит в repositories/ напрямую"
+type = "forbidden"
+source_modules = ["src.api"]
+forbidden_modules = ["src.repositories"]
+
+[[tool.importlinter.contracts]]
+name = "domain/ не зависит от I/O-слоёв"
+type = "forbidden"
+source_modules = ["src.domain"]
+forbidden_modules = ["src.api", "src.services", "src.repositories"]
