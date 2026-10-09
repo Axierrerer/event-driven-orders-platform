@@ -1,5 +1,6 @@
 """gRPC API каталога для внутренних вызовов (api-gateway, order-service)."""
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +27,10 @@ def to_message(product: Product) -> product_pb2.Product:
         currency=product.currency,
         is_published=product.is_published,
         version=product.version,
+        images=product.images,
+        attributes_json=json.dumps(product.attributes, ensure_ascii=False),
+        created_at=product.created_at.isoformat(),
+        updated_at=product.updated_at.isoformat(),
     )
 
 

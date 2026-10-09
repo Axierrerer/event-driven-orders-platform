@@ -4,8 +4,8 @@ import pytest
 from httpx import AsyncClient
 
 from events import OrderStatus, Role, uuid7
+from platform_lib.ratelimit import BucketConfig, TokenBucket
 from platform_lib.testing import TokenFactory
-from src.services.rate_limit import BucketConfig, TokenBucket
 
 from ..conftest import (
     World,

@@ -20,8 +20,10 @@
 | `auth-service` | ✅ готово |
 | `user-service` | ✅ готово |
 | `product-service` (REST + gRPC) | ✅ готово |
-| `inventory-service`, `order-service` (сага), `notification-service` | ⏳ в планах |
-| Маршрутизация `api-gateway`, rate limiting, единый Swagger | ⏳ в планах (пока только health-check) |
+| `inventory-service` (REST + gRPC) | ✅ готово |
+| `order-service` с сагой заказа | ✅ готово |
+| `notification-service` (письма, rate limiting) | ✅ готово |
+| `api-gateway` (маршрутизация, JWT, rate limiting, единый Swagger) за Nginx | ✅ готово |
 | Kubernetes (k3d + Helm), observability, проверки безопасности, e2e | ⏳ в планах |
 
 ---
@@ -44,7 +46,8 @@
 
 ```mermaid
 flowchart LR
-    client([Клиент]) -->|REST| gw[api-gateway]
+    client([Клиент]) -->|HTTP :8000| nginx[Nginx<br/>reverse proxy + LB]
+    nginx -->|least_conn| gw[api-gateway × N]
 
     gw -->|REST| auth[auth-service]
     gw -->|REST| users[user-service]
@@ -64,7 +67,8 @@ flowchart LR
 
 | Сервис | Назначение | Хранилище | Протоколы |
 |--------|-----------|-----------|-----------|
-| `api-gateway` | Единая точка входа, проверка JWT, маршрутизация, rate limiting | Redis | REST, gRPC |
+| `nginx` | Публичная точка входа: reverse proxy и балансировщик реплик api-gateway | — | HTTP |
+| `api-gateway` | Маршрутизация, проверка JWT, rate limiting, единый Swagger; карточки товаров по gRPC | Redis | REST, gRPC |
 | `auth-service` | Регистрация, подтверждение email, JWT access + refresh | PostgreSQL | REST |
 | `user-service` | Профили пользователей и роли (`ROLE_USER`, `ROLE_MANAGER`, `ROLE_ADMIN`) | PostgreSQL | REST, Kafka |
 | `product-service` | Каталог: CRUD, публикация, полнотекстовый поиск и фильтры | MongoDB, Redis | REST, gRPC, Kafka |
@@ -124,7 +128,7 @@ stateDiagram-v2
 | Аутентификация | JWT RS256 + JWKS (PyJWT), Argon2id (pwdlib) |
 | Зависимости | uv (workspace, единый `uv.lock`) |
 | Качество | ruff (линтер и форматирование), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
-| Инфраструктура | Docker, docker-compose; Kubernetes (k3d) и Helm — в планах |
+| Инфраструктура | Docker, docker-compose, Nginx; Kubernetes (k3d) и Helm — в планах |
 | Почта (локально) | Mailpit |
 
 ---
@@ -137,6 +141,7 @@ stateDiagram-v2
 ├── uv.lock                     # единый lock-файл зависимостей
 ├── Makefile                    # все рабочие команды (make help)
 ├── docker-compose.yml          # локальный стенд
+├── nginx/nginx.conf            # публичная точка входа: reverse proxy + балансировщик
 ├── proto/                      # .proto внутренних gRPC API
 ├── scripts/                    # все скрипты проекта
 │   ├── doctor.sh               #   проверка окружения разработчика
@@ -218,15 +223,17 @@ make dev-up
 ```
 
 Одна команда собирает образы, поднимает инфраструктуру, создаёт базы данных, топики Kafka и
-схемы событий, применяет миграции, запускает все сервисы и worker'ы и ждёт, пока они станут
-healthy. Обычно это около 30 секунд, при первом запуске дольше из-за скачивания образов.
+схемы событий, применяет миграции, запускает все сервисы и worker'ы, две реплики api-gateway и
+Nginx перед ними и ждёт, пока всё станет healthy. Обычно это около 30 секунд, при первом запуске
+дольше из-за скачивания образов.
 
 Файл `.env` для запуска **не нужен**: у всех переменных в `docker-compose.yml` есть значения
 по умолчанию для локальной разработки. Если нужно что-то переопределить, например занятый
 порт, создайте `.env` в корне:
 
 ```dotenv
-GATEWAY_HOST_PORT=8080
+GATEWAY_HOST_PORT=8080      # порт Nginx на хосте
+GATEWAY_REPLICAS=3          # сколько реплик api-gateway стоит за Nginx
 POSTGRES_HOST_PORT=15432
 ```
 
@@ -262,52 +269,84 @@ make dev-reset    # остановить и удалить все данные
 
 | Что | Адрес |
 |-----|-------|
-| auth-service + Swagger | http://localhost:8001, http://localhost:8001/docs |
-| user-service + Swagger | http://localhost:8002, http://localhost:8002/docs |
-| product-service + Swagger | http://localhost:8003, http://localhost:8003/docs |
-| api-gateway | http://localhost:8000 (пока только health-check) |
+| **API (Nginx → api-gateway)** | http://localhost:8000 |
+| **Swagger всей платформы** | http://localhost:8000/docs |
 | Mailpit (письма) | http://localhost:8025 |
 | Schema Registry | http://localhost:8081 |
+| Сервисы напрямую (отладка) | auth 8001, user 8002, product 8003, inventory 8004, order 8005, notification 8006 — у каждого `/docs` |
 | Kafka (с хоста) | `localhost:9094` |
 | PostgreSQL | `localhost:5432`, пользователь `postgres` |
 | MongoDB | `mongodb://localhost:27017/?directConnection=true` |
 | Redis | `localhost:6379` |
 | Kafka UI (по желанию) | http://localhost:8088 — `docker compose --profile tools up -d kafka-ui` |
 
-Все опубликованные порты слушают только `127.0.0.1`. Пока в api-gateway нет маршрутизации,
-сервисы вызываются напрямую на портах 8001–8003.
+Все опубликованные порты слушают только `127.0.0.1`. Клиенты работают через порт 8000; прямые
+порты сервисов оставлены для отладки.
 
-### Пример: аккаунт, профиль, каталог
+### Путь запроса
 
-```bash
-# Регистрация и вход
-curl -s localhost:8001/api/v1/auth/register -H 'Content-Type: application/json' \
-  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}'
-
-TOKEN=$(curl -s localhost:8001/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}' \
-  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
-
-# Профиль (создаётся асинхронно по событию user.created)
-curl -s localhost:8002/api/v1/users/me -H "Authorization: Bearer $TOKEN"
-
-# Поиск по каталогу: публичный, токен не нужен (кириллицу в запросе нужно кодировать)
-curl -s -G localhost:8003/api/v1/products \
-  --data-urlencode 'q=чайник' -d price_max=2000 -d sort=price
+```
+клиент → Nginx :8000 → api-gateway (2 реплики, least_conn) → сервис
 ```
 
-Ссылка подтверждения email уходит событием `user.verification-requested`; само письмо будет
-отправлять notification-service (в планах). Для операций администратора (создание товаров,
-управление ролями) нужен токен администратора из шага 4.
+- **Nginx** балансирует реплики gateway (`least_conn`), при падении реплики повторяет запрос на
+  соседней, добавляет `X-Request-ID`, `X-Real-IP`, `X-Forwarded-For`, ограничивает тело запроса
+  1 MB и пишет access log в JSON. Новые реплики подхватываются через DNS Docker без перезапуска
+  Nginx: `docker compose up -d --scale api-gateway=3`.
+- **api-gateway** проверяет JWT по JWKS auth-service (невалидный токен до сервисов не доходит),
+  вырезает присланные клиентом `X-User-*` / `X-Forwarded-*`, применяет rate limit (token bucket
+  в Redis: 100 rps на пользователя, 20 rps на IP для анонимов, 10 входов в минуту с IP) и
+  отвечает ошибками в формате `application/problem+json`. `GET /api/v1/products/{id}` для
+  покупателей обслуживается по gRPC из product-service (при недоступности gRPC — по REST).
+- В каждом ответе есть `X-Request-ID`, `X-Gateway-Instance` (какая реплика ответила) и
+  `RateLimit-Limit` / `RateLimit-Remaining`.
 
-Основные эндпоинты (полный список — в Swagger каждого сервиса):
+### Пример: от регистрации до выполненного заказа
 
-| Сервис | Эндпоинты |
+```bash
+API=localhost:8000/api/v1
+
+# Регистрация; письмо подтверждения придёт в Mailpit (http://localhost:8025)
+curl -s $API/auth/register -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}'
+curl -s $API/auth/verify-email -H 'Content-Type: application/json' \
+  -d '{"token": "<токен из ссылки>"}'
+
+TOKEN=$(curl -s $API/auth/login -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}' \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+AUTH="Authorization: Bearer $TOKEN"
+
+curl -s $API/users/me -H "$AUTH"                               # профиль
+curl -s -G $API/products --data-urlencode 'q=чайник' -d price_max=2000 -d sort=price  # каталог
+
+# Заказ: цены берутся из каталога, ключ делает повтор запроса безопасным
+curl -s $API/orders -H "$AUTH" -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"items": [{"product_id": "<id товара>", "quantity": 1}]}'
+
+curl -s $API/orders/<id заказа> -H "$AUTH"          # через мгновение NEW → RESERVED (сага)
+curl -s -X POST $API/orders/<id заказа>/pay -H "$AUTH"
+```
+
+Отгрузка и завершение (`POST /orders/{id}/ship`, `/complete`), создание товаров и пополнение
+остатков (`POST /inventory/stock/{id}/adjust`) требуют токена менеджера или администратора
+(см. шаг 4). О каждой смене статуса покупатель получает письмо — смотрите Mailpit.
+
+Основные эндпоинты (полный список — в Swagger на http://localhost:8000/docs):
+
+| Раздел | Эндпоинты |
 |--------|-----------|
 | auth | `POST /api/v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout`, `/password`; `GET /api/v1/auth/.well-known/jwks.json` |
-| user | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users` (персонал); `GET /api/v1/users/{id}`; `PUT /api/v1/users/{id}/roles`, `DELETE /api/v1/users/{id}` (администратор) |
-| product | `GET /api/v1/products` (поиск), `GET /api/v1/products/{id}`; `POST/PUT/PATCH/DELETE` (администратор, поддерживается `If-Match`); `POST /{id}/publish`, `/{id}/unpublish` (администратор, менеджер); `/api/v1/categories` |
-| product gRPC | `orders.catalog.v1.ProductService/GetProduct`, `GetProducts` на порту 50051 (внутренняя сеть) |
+| пользователи | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users` (персонал); `GET /api/v1/users/{id}`; `PUT /api/v1/users/{id}/roles`, `DELETE /api/v1/users/{id}` (администратор) |
+| каталог | `GET /api/v1/products` (поиск), `GET /api/v1/products/{id}`; `POST/PUT/PATCH/DELETE` (администратор, `If-Match`); `POST /{id}/publish`, `/{id}/unpublish` (персонал); `/api/v1/categories` |
+| склад | `GET /api/v1/inventory/stock/{product_id}`, `POST /api/v1/inventory/stock/{product_id}/adjust` (персонал) |
+| заказы | `POST /api/v1/orders` (нужен `Idempotency-Key`), `GET /api/v1/orders`, `GET /api/v1/orders/{id}`, `POST /{id}/pay`, `/{id}/cancel`; `/{id}/ship`, `/{id}/complete` (персонал) |
+| уведомления | `GET /api/v1/notifications` (журнал), `GET/PUT /api/v1/notifications/templates/{key}` (администратор) |
+| gRPC (внутренний) | `orders.catalog.v1.ProductService` :50051, `orders.inventory.v1.InventoryService` :50052 |
+
+Имитация платёжного провайдера отклоняет суммы, оканчивающиеся на `.13`, — так можно
+проверить неудачную оплату.
 
 ### Проверка и логи
 
@@ -434,7 +473,9 @@ docker build -f product-service/Dockerfile -t orders/product-service:dev .
 
 | Симптом | Что делать |
 |---------|-----------|
-| `make dev-up`: `port is already allocated` | Переопределите порт в `.env` (`POSTGRES_HOST_PORT=15432`, `AUTH_SERVICE_HOST_PORT=18001` и т. п.) |
+| `make dev-up`: `port is already allocated` | Переопределите порт в `.env` (`GATEWAY_HOST_PORT=8080`, `POSTGRES_HOST_PORT=15432`, `AUTH_SERVICE_HOST_PORT=18001` и т. п.) |
+| API отвечает `429 Too Many Requests` | Сработал rate limit api-gateway; подождите `Retry-After` секунд |
+| API отвечает `502` / `504` | Сервис недоступен или медленный: `make dev-ps`, `docker compose logs <сервис>` |
 | `Cannot connect to the Docker daemon` | Запустите Docker Desktop / OrbStack / Colima, затем `make doctor` |
 | Контейнер в статусе `unhealthy` | `docker compose logs <сервис>`, затем `make dev-down && make dev-up` |
 | Нужно начать с чистыми данными | `make dev-reset && make dev-up` |

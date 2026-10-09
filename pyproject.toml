@@ -18,6 +18,7 @@ dev = [
     "testcontainers[postgres,redis,mongodb,kafka]>=4.8",
     "grpcio-tools>=1.66",
     "asgi-lifespan>=2.1",
+    "respx>=0.21",
 ]
 
 [tool.uv]

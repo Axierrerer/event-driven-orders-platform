@@ -25,7 +25,7 @@ else
 end
 redis.call('HSET', key, 'tokens', tostring(tokens), 'ts', tostring(now))
 redis.call('PEXPIRE', key, math.ceil(capacity * refill_ms) + 1000)
-return {allowed, retry_ms}
+return {allowed, retry_ms, math.floor(tokens)}
 """
 
 
@@ -39,6 +39,7 @@ class BucketConfig:
 class Decision:
     allowed: bool
     retry_after_seconds: float
+    remaining: int = 0
 
 
 class TokenBucket:
@@ -47,8 +48,12 @@ class TokenBucket:
         self._script = redis.register_script(_SCRIPT)
 
     async def take(self, key: str, config: BucketConfig) -> Decision:
-        allowed, retry_ms = await self._script(
+        allowed, retry_ms, remaining = await self._script(
             keys=[f"bucket:{key}"],
-            args=[config.capacity, int(config.refill_seconds * 1000)],
+            args=[config.capacity, max(int(config.refill_seconds * 1000), 1)],
         )
-        return Decision(allowed=bool(allowed), retry_after_seconds=int(retry_ms) / 1000)
+        return Decision(
+            allowed=bool(allowed),
+            retry_after_seconds=int(retry_ms) / 1000,
+            remaining=int(remaining),
+        )

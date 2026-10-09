@@ -20,8 +20,10 @@ the others and publishes compensating events when something fails.
 | `auth-service` | ✅ done |
 | `user-service` | ✅ done |
 | `product-service` (REST + gRPC) | ✅ done |
-| `inventory-service`, `order-service` (saga), `notification-service` | ⏳ planned |
-| `api-gateway` routing, rate limiting, unified Swagger | ⏳ planned (health check only) |
+| `inventory-service` (REST + gRPC) | ✅ done |
+| `order-service` with the order saga | ✅ done |
+| `notification-service` (emails, rate limiting) | ✅ done |
+| `api-gateway` (routing, JWT, rate limiting, unified Swagger) behind Nginx | ✅ done |
 | Kubernetes (k3d + Helm), observability, security scans, e2e | ⏳ planned |
 
 ---
@@ -44,7 +46,8 @@ the others and publishes compensating events when something fails.
 
 ```mermaid
 flowchart LR
-    client([Client]) -->|REST| gw[api-gateway]
+    client([Client]) -->|HTTP :8000| nginx[Nginx<br/>reverse proxy + LB]
+    nginx -->|least_conn| gw[api-gateway × N]
 
     gw -->|REST| auth[auth-service]
     gw -->|REST| users[user-service]
@@ -64,7 +67,8 @@ flowchart LR
 
 | Service | Responsibility | Storage | Protocols |
 |---------|----------------|---------|-----------|
-| `api-gateway` | Single entry point, JWT check, routing, rate limiting | Redis | REST, gRPC |
+| `nginx` | Public entry point: reverse proxy and load balancer for the api-gateway replicas | — | HTTP |
+| `api-gateway` | Routing, JWT check, rate limiting, unified Swagger; product cards over gRPC | Redis | REST, gRPC |
 | `auth-service` | Registration, email verification, JWT access + refresh tokens | PostgreSQL | REST |
 | `user-service` | User profiles and roles (`ROLE_USER`, `ROLE_MANAGER`, `ROLE_ADMIN`) | PostgreSQL | REST, Kafka |
 | `product-service` | Catalog: CRUD, publishing, full-text search and filters | MongoDB, Redis | REST, gRPC, Kafka |
@@ -124,7 +128,7 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 | Auth | JWT RS256 + JWKS (PyJWT), Argon2id (pwdlib) |
 | Dependencies | uv (workspace, single `uv.lock`) |
 | Quality | ruff (lint + format), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
-| Infrastructure | Docker, docker-compose; Kubernetes (k3d) and Helm are planned |
+| Infrastructure | Docker, docker-compose, Nginx; Kubernetes (k3d) and Helm are planned |
 | Local mail | Mailpit |
 
 ---
@@ -137,6 +141,7 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 ├── uv.lock                     # single lock file
 ├── Makefile                    # all project commands (make help)
 ├── docker-compose.yml          # local stack
+├── nginx/nginx.conf            # public entry point: reverse proxy + load balancer
 ├── proto/                      # .proto sources of internal gRPC APIs
 ├── scripts/                    # all scripts
 │   ├── doctor.sh               #   developer environment check
@@ -218,14 +223,16 @@ make dev-up
 ```
 
 One command builds the images, starts the infrastructure, creates databases, Kafka topics and
-event schemas, runs migrations, starts all services and workers and waits until they are
-healthy. It takes about 30 seconds (longer on the first run while images are downloaded).
+event schemas, runs migrations, starts all services and workers, two api-gateway replicas and
+Nginx in front of them, and waits until everything is healthy. It takes about 30 seconds
+(longer on the first run while images are downloaded).
 
 No `.env` file is needed: every variable in `docker-compose.yml` has a local default. To
 override something, e.g. a port that is already taken, create `.env` in the repository root:
 
 ```dotenv
-GATEWAY_HOST_PORT=8080
+GATEWAY_HOST_PORT=8080      # Nginx port on the host
+GATEWAY_REPLICAS=3          # number of api-gateway replicas behind Nginx
 POSTGRES_HOST_PORT=15432
 ```
 
@@ -261,51 +268,83 @@ make dev-reset    # stop and delete all data
 
 | What | Address |
 |------|---------|
-| auth-service + Swagger | http://localhost:8001, http://localhost:8001/docs |
-| user-service + Swagger | http://localhost:8002, http://localhost:8002/docs |
-| product-service + Swagger | http://localhost:8003, http://localhost:8003/docs |
-| api-gateway | http://localhost:8000 (health check only for now) |
+| **API (Nginx → api-gateway)** | http://localhost:8000 |
+| **Swagger for the whole platform** | http://localhost:8000/docs |
 | Mailpit (emails) | http://localhost:8025 |
 | Schema Registry | http://localhost:8081 |
+| Services directly (debugging) | auth 8001, user 8002, product 8003, inventory 8004, order 8005, notification 8006 — each with `/docs` |
 | Kafka (from the host) | `localhost:9094` |
 | PostgreSQL | `localhost:5432`, user `postgres` |
 | MongoDB | `mongodb://localhost:27017/?directConnection=true` |
 | Redis | `localhost:6379` |
 | Kafka UI (optional) | http://localhost:8088 — `docker compose --profile tools up -d kafka-ui` |
 
-All published ports listen on `127.0.0.1` only. Until api-gateway routing is implemented,
-services are called directly on ports 8001–8003.
+All published ports listen on `127.0.0.1` only. Clients use port 8000; direct service ports
+exist for debugging.
 
-### Example: account, profile, catalog
+### Request path
 
-```bash
-# Register and log in
-curl -s localhost:8001/api/v1/auth/register -H 'Content-Type: application/json' \
-  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}'
-
-TOKEN=$(curl -s localhost:8001/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}' \
-  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
-
-# Profile (created asynchronously from the user.created event)
-curl -s localhost:8002/api/v1/users/me -H "Authorization: Bearer $TOKEN"
-
-# Catalog search: public, no token needed
-curl -s 'localhost:8003/api/v1/products?q=teapot&price_max=2000&sort=price'
+```
+client → Nginx :8000 → api-gateway (2 replicas, least_conn) → service
 ```
 
-The email verification link is sent as the `user.verification-requested` event; the email
-itself will be delivered by notification-service (planned). Admin operations (creating
-products, managing roles) need a token of the administrator from step 4.
+- **Nginx** balances the gateway replicas (`least_conn`), retries a request on another
+  replica if one is down, adds `X-Request-ID`, `X-Real-IP`, `X-Forwarded-For`, limits the
+  body to 1 MB and writes a JSON access log. New replicas are picked up through Docker DNS
+  without restarting Nginx: `docker compose up -d --scale api-gateway=3`.
+- **api-gateway** checks the JWT against the auth-service JWKS (an invalid token never reaches
+  a service), strips client-supplied `X-User-*` / `X-Forwarded-*` headers, applies rate limits
+  (Redis token bucket: 100 rps per user, 20 rps per IP for anonymous clients, 10 logins per
+  minute per IP) and answers errors as `application/problem+json`. `GET /api/v1/products/{id}`
+  for customers is served over gRPC from product-service (falls back to REST if gRPC is down).
+- Every response carries `X-Request-ID`, `X-Gateway-Instance` (which replica answered) and
+  `RateLimit-Limit` / `RateLimit-Remaining`.
 
-Main endpoints (full list in each service's Swagger):
+### Example: from registration to a completed order
 
-| Service | Endpoints |
-|---------|-----------|
+```bash
+API=localhost:8000/api/v1
+
+# Register; the verification email arrives in Mailpit (http://localhost:8025)
+curl -s $API/auth/register -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}'
+curl -s $API/auth/verify-email -H 'Content-Type: application/json' \
+  -d '{"token": "<token from the link>"}'
+
+TOKEN=$(curl -s $API/auth/login -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}' \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+AUTH="Authorization: Bearer $TOKEN"
+
+curl -s $API/users/me -H "$AUTH"                               # profile
+curl -s "$API/products?q=teapot&price_max=2000&sort=price"      # catalog search, public
+
+# Place an order: prices come from the catalog, the key makes retries safe
+curl -s $API/orders -H "$AUTH" -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"items": [{"product_id": "<product id>", "quantity": 1}]}'
+
+curl -s $API/orders/<order id> -H "$AUTH"          # NEW → RESERVED in a moment (saga)
+curl -s -X POST $API/orders/<order id>/pay -H "$AUTH"
+```
+
+Shipping and completing (`POST /orders/{id}/ship`, `/complete`), creating products and adding
+stock (`POST /inventory/stock/{id}/adjust`) need a manager or administrator token (see step 4).
+Every status change is emailed to the customer — see Mailpit.
+
+Main endpoints (full list in Swagger at http://localhost:8000/docs):
+
+| Area | Endpoints |
+|------|-----------|
 | auth | `POST /api/v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout`, `/password`; `GET /api/v1/auth/.well-known/jwks.json` |
-| user | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users` (staff); `GET /api/v1/users/{id}`; `PUT /api/v1/users/{id}/roles`, `DELETE /api/v1/users/{id}` (admin) |
-| product | `GET /api/v1/products` (search), `GET /api/v1/products/{id}`; `POST/PUT/PATCH/DELETE` (admin, `If-Match` supported); `POST /{id}/publish`, `/{id}/unpublish` (admin, manager); `/api/v1/categories` |
-| product gRPC | `orders.catalog.v1.ProductService/GetProduct`, `GetProducts` on port 50051 (internal network) |
+| users | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users` (staff); `GET /api/v1/users/{id}`; `PUT /api/v1/users/{id}/roles`, `DELETE /api/v1/users/{id}` (admin) |
+| catalog | `GET /api/v1/products` (search), `GET /api/v1/products/{id}`; `POST/PUT/PATCH/DELETE` (admin, `If-Match`); `POST /{id}/publish`, `/{id}/unpublish` (staff); `/api/v1/categories` |
+| inventory | `GET /api/v1/inventory/stock/{product_id}`, `POST /api/v1/inventory/stock/{product_id}/adjust` (staff) |
+| orders | `POST /api/v1/orders` (`Idempotency-Key` required), `GET /api/v1/orders`, `GET /api/v1/orders/{id}`, `POST /{id}/pay`, `/{id}/cancel`; `/{id}/ship`, `/{id}/complete` (staff) |
+| notifications | `GET /api/v1/notifications` (journal), `GET/PUT /api/v1/notifications/templates/{key}` (admin) |
+| gRPC (internal) | `orders.catalog.v1.ProductService` :50051, `orders.inventory.v1.InventoryService` :50052 |
+
+The fake payment provider declines amounts ending in `.13` — handy to try a failed payment.
 
 ### Checks and logs
 
@@ -433,7 +472,9 @@ unprivileged user, the image has a `HEALTHCHECK`.
 
 | Symptom | What to do |
 |---------|------------|
-| `make dev-up`: `port is already allocated` | Override the port in `.env` (`POSTGRES_HOST_PORT=15432`, `AUTH_SERVICE_HOST_PORT=18001`, ...) |
+| `make dev-up`: `port is already allocated` | Override the port in `.env` (`GATEWAY_HOST_PORT=8080`, `POSTGRES_HOST_PORT=15432`, `AUTH_SERVICE_HOST_PORT=18001`, ...) |
+| `429 Too Many Requests` from the API | Rate limit of api-gateway; wait `Retry-After` seconds |
+| `502` / `504` from the API | A service is down or slow: `make dev-ps`, `docker compose logs <service>` |
 | `Cannot connect to the Docker daemon` | Start Docker Desktop / OrbStack / Colima, then `make doctor` |
 | A container is `unhealthy` | `docker compose logs <service>`, then `make dev-down && make dev-up` |
 | Need clean data | `make dev-reset && make dev-up` |
