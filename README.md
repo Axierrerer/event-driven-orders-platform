@@ -122,7 +122,6 @@ Pydantic-модели в `libs/events`. Из них генерируется JSO
 ├── docker-compose.yml          # локальный стенд
 ├── scripts/                    # все скрипты проекта
 │   ├── doctor.sh               #   проверка окружения разработчика
-│   ├── dev-up.ps1 / dev-down.ps1  # запуск стенда из PowerShell
 │   ├── postgres-init-databases.sh # создание БД и ролей сервисов
 │   └── kafka-create-topics.sh  #   создание топиков и DLQ
 ├── libs/
@@ -173,8 +172,7 @@ uv python install 3.12
 ```
 
 **Windows 10/11:** Docker Desktop с бэкендом WSL2. Дальше всё делается внутри
-WSL2 (Ubuntu) так же, как в Linux. Для PowerShell есть скрипты `scripts/dev-up.ps1`
-и `scripts/dev-down.ps1`.
+WSL2 (Ubuntu) так же, как в Linux.
 
 **Linux / WSL2:**
 
@@ -206,12 +204,6 @@ make dev-up
 Одна команда собирает образы, поднимает инфраструктуру, создаёт базы данных и
 топики, запускает все сервисы и ждёт, пока они станут healthy. Обычно это
 занимает около 30 секунд, при первом запуске дольше из-за скачивания образов.
-
-Из PowerShell:
-
-```powershell
-./scripts/dev-up.ps1
-```
 
 Файл `.env` для запуска **не нужен**: у всех переменных в `docker-compose.yml`
 есть значения по умолчанию для локальной разработки. Если нужно что-то
@@ -368,7 +360,7 @@ docker build -f order-service/Dockerfile -t orders/order-service:dev .
 ## Дорожная карта
 
 - [x] Каркас: uv workspace, 7 сервисов с health-check, Dockerfile, линтеры, тесты
-- [x] Локальный стенд одной командой: `make dev-up` / `scripts/dev-up.ps1`
+- [x] Локальный стенд одной командой: `make dev-up`
 - [ ] Контракт событий в `libs/events`, регистрация схем в Schema Registry
 - [ ] Общая библиотека: outbox, идемпотентный consumer, DLQ, структурные логи
 - [ ] auth-service: регистрация, подтверждение email, JWT access + refresh
