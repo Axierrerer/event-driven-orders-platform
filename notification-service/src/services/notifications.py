@@ -18,6 +18,7 @@ from events import (
     UserVerificationRequested,
 )
 from platform_lib.logging import get_logger
+from platform_lib.ratelimit import BucketConfig, TokenBucket
 from src.domain.models import (
     Bucket,
     Notification,
@@ -30,7 +31,6 @@ from src.repositories.contacts import ContactRepository
 from src.repositories.journal import JournalRepository
 from src.repositories.templates import TemplateRepository
 from src.services.email import EmailSender, OutgoingEmail
-from src.services.rate_limit import BucketConfig, TokenBucket
 
 log = get_logger(__name__)
 

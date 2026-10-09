@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%orders_proto/catalog/v1/product.proto\x12\x11orders.catalog.v1\"\'\n\x11GetProductRequest\x12\x12\n\nproduct_id\x18\x01 \x01(\t\")\n\x12GetProductsRequest\x12\x13\n\x0bproduct_ids\x18\x01 \x03(\t\"C\n\x13GetProductsResponse\x12,\n\x08products\x18\x01 \x03(\x0b\x32\x1a.orders.catalog.v1.Product\"\xa2\x01\n\x07Product\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0b\n\x03sku\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x13\n\x0b\x63\x61tegory_id\x18\x05 \x01(\t\x12\r\n\x05price\x18\x06 \x01(\t\x12\x10\n\x08\x63urrency\x18\x07 \x01(\t\x12\x14\n\x0cis_published\x18\x08 \x01(\x08\x12\x0f\n\x07version\x18\t \x01(\x03\x32\xbe\x01\n\x0eProductService\x12N\n\nGetProduct\x12$.orders.catalog.v1.GetProductRequest\x1a\x1a.orders.catalog.v1.Product\x12\\\n\x0bGetProducts\x12%.orders.catalog.v1.GetProductsRequest\x1a&.orders.catalog.v1.GetProductsResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%orders_proto/catalog/v1/product.proto\x12\x11orders.catalog.v1\"\'\n\x11GetProductRequest\x12\x12\n\nproduct_id\x18\x01 \x01(\t\")\n\x12GetProductsRequest\x12\x13\n\x0bproduct_ids\x18\x01 \x03(\t\"C\n\x13GetProductsResponse\x12,\n\x08products\x18\x01 \x03(\x0b\x32\x1a.orders.catalog.v1.Product\"\xf3\x01\n\x07Product\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0b\n\x03sku\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x13\n\x0b\x63\x61tegory_id\x18\x05 \x01(\t\x12\r\n\x05price\x18\x06 \x01(\t\x12\x10\n\x08\x63urrency\x18\x07 \x01(\t\x12\x14\n\x0cis_published\x18\x08 \x01(\x08\x12\x0f\n\x07version\x18\t \x01(\x03\x12\x0e\n\x06images\x18\n \x03(\t\x12\x17\n\x0f\x61ttributes_json\x18\x0b \x01(\t\x12\x12\n\ncreated_at\x18\x0c \x01(\t\x12\x12\n\nupdated_at\x18\r \x01(\t2\xbe\x01\n\x0eProductService\x12N\n\nGetProduct\x12$.orders.catalog.v1.GetProductRequest\x1a\x1a.orders.catalog.v1.Product\x12\\\n\x0bGetProducts\x12%.orders.catalog.v1.GetProductsRequest\x1a&.orders.catalog.v1.GetProductsResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,7 +38,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GETPRODUCTSRESPONSE']._serialized_start=144
   _globals['_GETPRODUCTSRESPONSE']._serialized_end=211
   _globals['_PRODUCT']._serialized_start=214
-  _globals['_PRODUCT']._serialized_end=376
-  _globals['_PRODUCTSERVICE']._serialized_start=379
-  _globals['_PRODUCTSERVICE']._serialized_end=569
+  _globals['_PRODUCT']._serialized_end=457
+  _globals['_PRODUCTSERVICE']._serialized_start=460
+  _globals['_PRODUCTSERVICE']._serialized_end=650
 # @@protoc_insertion_point(module_scope)

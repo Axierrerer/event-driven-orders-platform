@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 
 import grpc
@@ -45,9 +46,14 @@ async def test_get_products_limit(stub: product_pb2_grpc.ProductServiceStub) -> 
 async def test_get_product_not_found_and_invalid_id(
     stub: product_pb2_grpc.ProductServiceStub, create_product: CreateProduct
 ) -> None:
-    product = await create_product(name="Чашка")
+    product = await create_product(
+        name="Чашка", images=["https://cdn.test/cup.png"], attributes={"volume_ml": 300}
+    )
     found = await stub.GetProduct(product_pb2.GetProductRequest(product_id=product["id"]))
     assert found.name == "Чашка"
+    assert list(found.images) == ["https://cdn.test/cup.png"]
+    assert json.loads(found.attributes_json) == {"volume_ml": 300}
+    assert found.created_at.startswith("20")
 
     with pytest.raises(grpc.aio.AioRpcError) as missing:
         await stub.GetProduct(product_pb2.GetProductRequest(product_id=str(uuid7())))

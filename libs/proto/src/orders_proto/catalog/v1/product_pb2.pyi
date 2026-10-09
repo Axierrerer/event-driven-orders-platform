@@ -25,7 +25,7 @@ class GetProductsResponse(_message.Message):
     def __init__(self, products: _Optional[_Iterable[_Union[Product, _Mapping]]] = ...) -> None: ...
 
 class Product(_message.Message):
-    __slots__ = ("id", "sku", "name", "description", "category_id", "price", "currency", "is_published", "version")
+    __slots__ = ("id", "sku", "name", "description", "category_id", "price", "currency", "is_published", "version", "images", "attributes_json", "created_at", "updated_at")
     ID_FIELD_NUMBER: _ClassVar[int]
     SKU_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
@@ -35,6 +35,10 @@ class Product(_message.Message):
     CURRENCY_FIELD_NUMBER: _ClassVar[int]
     IS_PUBLISHED_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
+    IMAGES_FIELD_NUMBER: _ClassVar[int]
+    ATTRIBUTES_JSON_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
     id: str
     sku: str
     name: str
@@ -44,4 +48,8 @@ class Product(_message.Message):
     currency: str
     is_published: bool
     version: int
-    def __init__(self, id: _Optional[str] = ..., sku: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., category_id: _Optional[str] = ..., price: _Optional[str] = ..., currency: _Optional[str] = ..., is_published: _Optional[bool] = ..., version: _Optional[int] = ...) -> None: ...
+    images: _containers.RepeatedScalarFieldContainer[str]
+    attributes_json: str
+    created_at: str
+    updated_at: str
+    def __init__(self, id: _Optional[str] = ..., sku: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., category_id: _Optional[str] = ..., price: _Optional[str] = ..., currency: _Optional[str] = ..., is_published: _Optional[bool] = ..., version: _Optional[int] = ..., images: _Optional[_Iterable[str]] = ..., attributes_json: _Optional[str] = ..., created_at: _Optional[str] = ..., updated_at: _Optional[str] = ...) -> None: ...

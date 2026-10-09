@@ -9,6 +9,7 @@ from platform_lib.auth import JwksKeyProvider, JwtVerifier
 from platform_lib.checks import mongo_check, redis_check
 from platform_lib.health import HealthRegistry, health_router
 from platform_lib.logging import configure_logging
+from platform_lib.ratelimit import BucketConfig, TokenBucket
 from src import db
 from src.api.routes import router
 from src.config import Settings, get_settings
@@ -17,7 +18,6 @@ from src.repositories.templates import TemplateRepository
 from src.services.admin import AdminService
 from src.services.email import EmailSender, SmtpEmailSender
 from src.services.notifications import NotificationService
-from src.services.rate_limit import BucketConfig, TokenBucket
 
 
 def build_service(
