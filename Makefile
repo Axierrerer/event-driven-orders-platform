@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -41,6 +41,7 @@ test-integration: ## Интеграционные тесты (testcontainers, н
 
 dev-up: ## Поднять локальный стенд одной командой
 	$(COMPOSE) up -d --build --wait
+	uv run python scripts/seed.py
 	@echo ""
 	@echo "Стенд поднят:"
 	@echo "  API gateway / Swagger: http://localhost:$${GATEWAY_HOST_PORT:-8000}/docs"
@@ -92,3 +93,6 @@ check-alerts: ## Проверить правила алертов Prometheus и 
 		--entrypoint promtool prom/prometheus:v3.2.1 check rules alerts.yml
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/rules:ro" -w /rules \
 		--entrypoint promtool prom/prometheus:v3.2.1 test rules alerts_test.yml
+
+seed: ## Тестовые данные стенда: админ, менеджер, категории, товары, остатки (идемпотентно)
+	uv run python scripts/seed.py

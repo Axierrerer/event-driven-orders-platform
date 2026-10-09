@@ -25,7 +25,7 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["libs/*", "*-service", "api-gateway"]
+members = ["libs/*", "*-service", "api-gateway", "e2e"]
 
 # ---------- ruff ----------
 [tool.ruff]
