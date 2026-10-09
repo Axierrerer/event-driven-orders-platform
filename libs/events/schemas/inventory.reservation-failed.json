@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "InventoryReservationFailedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "missing": {
+          "items": {
+            "$ref": "#/$defs/MissingItem"
+          },
+          "title": "Missing",
+          "type": "array"
+        },
+        "order_id": {
+          "format": "uuid",
+          "title": "Order Id",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ReservationFailureReason"
+        }
+      },
+      "required": [
+        "order_id",
+        "reason"
+      ],
+      "title": "InventoryReservationFailedPayload",
+      "type": "object"
+    },
+    "MissingItem": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "minimum": 0,
+          "title": "Available",
+          "type": "integer"
+        },
+        "product_id": {
+          "format": "uuid",
+          "title": "Product Id",
+          "type": "string"
+        },
+        "requested": {
+          "exclusiveMinimum": 0,
+          "title": "Requested",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "product_id",
+        "requested",
+        "available"
+      ],
+      "title": "MissingItem",
+      "type": "object"
+    },
+    "ReservationFailureReason": {
+      "enum": [
+        "OUT_OF_STOCK",
+        "UNKNOWN_PRODUCT",
+        "ERROR"
+      ],
+      "title": "ReservationFailureReason",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "format": "uuid",
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "inventory.reservation-failed",
+      "default": "inventory.reservation-failed",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "event_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Event Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/InventoryReservationFailedPayload"
+    },
+    "producer": {
+      "minLength": 1,
+      "title": "Producer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "title": "InventoryReservationFailed",
+  "type": "object"
+}

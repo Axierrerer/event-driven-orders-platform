@@ -26,6 +26,8 @@ x-service-defaults: &service-defaults
       condition: service_healthy
     kafka-init:
       condition: service_completed_successfully
+    schema-init:
+      condition: service_completed_successfully
 
 services:
   # ---------------- инфраструктура ----------------
@@ -151,6 +153,17 @@ services:
       timeout: 5s
       retries: 20
       start_period: 15s
+
+  # Регистрирует JSON Schema всех событий (идемпотентно); образ любого сервиса содержит libs/events
+  schema-init:
+    build: { context: ., dockerfile: api-gateway/Dockerfile }
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+    command: ["python", "-m", "events.schemas_cli", "register", "--url", "http://schema-registry:8081"]
+    healthcheck:
+      disable: true
+    restart: "no"
 
   mailpit:
     image: axllent/mailpit:v1.21
