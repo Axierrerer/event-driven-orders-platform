@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 _CENT = Decimal("0.01")
+MAX_MONEY = Decimal("9999999999.99")  # влезает в NUMERIC(12,2)
 
 
 def _reject_float(value: object) -> object:
@@ -28,7 +29,8 @@ def _money_to_str(value: Decimal) -> str:
 Money = Annotated[
     Decimal,
     BeforeValidator(_reject_float),
-    Field(ge=0, max_digits=12, decimal_places=2),
+    # max_digits проверяется после нормализации (12345678901.00 → 11 цифр), поэтому нужен le
+    Field(ge=0, le=MAX_MONEY, max_digits=12, decimal_places=2),
     PlainSerializer(_money_to_str, return_type=str, when_used="json"),
     WithJsonSchema(
         {"type": "string", "pattern": r"^\d{1,10}\.\d{2}$"},

@@ -9,6 +9,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6",
+    "orders-proto",
+    "motor>=3.6",
+    "redis>=5.2",
+    "grpcio>=1.66",
+    "grpcio-health-checking>=1.66",
 ]
 
 [tool.uv]
@@ -18,6 +23,7 @@ package = false
 [tool.uv.sources]
 events = { workspace = true }
 platform-lib = { workspace = true }
+orders-proto = { workspace = true }
 
 
 [tool.pytest.ini_options]

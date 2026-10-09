@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -20,6 +20,10 @@ lint: ## ruff check + проверка формата + правила слоё�
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run python -m events.schemas_cli check
+	@tmp=$$(mktemp -d) && ./scripts/generate-proto.sh "$$tmp" && \
+		diff -r -x __pycache__ "$$tmp/orders_proto" libs/proto/src/orders_proto >/dev/null; \
+		status=$$?; rm -r "$$tmp"; \
+		if [ $$status -ne 0 ]; then echo "gRPC-код устарел: выполните make proto"; exit 1; fi
 	@set -e; for s in $(SERVICES); do (cd $$s && uv run lint-imports --no-cache | tail -1 | sed "s|^|$$s: |"); done
 
 format: ## Автоисправление и форматирование
@@ -69,3 +73,6 @@ register-schemas: ## Зарегистрировать схемы в Schema Regis
 
 compat-schemas: ## Проверить совместимость моделей со схемами в реестре
 	uv run python -m events.schemas_cli compat --url $(SCHEMA_REGISTRY_URL)
+
+proto: ## Сгенерировать Python-код gRPC из proto/ в libs/proto
+	./scripts/generate-proto.sh

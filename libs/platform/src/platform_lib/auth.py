@@ -168,6 +168,22 @@ async def current_principal(
 CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
 
 
+async def optional_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    verifier: Annotated[JwtVerifier, Depends(verifier_from_app)],
+) -> Principal | None:
+    """Для публичных эндпоинтов: без токена — аноним, с невалидным токеном — 401."""
+    if credentials is None:
+        return None
+    try:
+        return await verifier.verify(credentials.credentials)
+    except InvalidTokenError as exc:
+        raise _unauthorized("invalid token") from exc
+
+
+OptionalPrincipal = Annotated[Principal | None, Depends(optional_principal)]
+
+
 def require_roles(*roles: Role) -> Callable[[Principal], Awaitable[Principal]]:
     """Зависимость: пользователь должен иметь хотя бы одну из ролей."""
 

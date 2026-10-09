@@ -17,6 +17,7 @@ from platform_lib.auth import (
     InvalidTokenError,
     JwksKeyProvider,
     JwtVerifier,
+    OptionalPrincipal,
     Principal,
     StaticKeyProvider,
     public_jwk,
@@ -150,3 +151,19 @@ async def test_fastapi_dependencies() -> None:
         assert (await c.get("/admin", headers=user)).status_code == 403
         admin = {"Authorization": f"Bearer {make_token(roles=['ROLE_ADMIN'])}"}
         assert (await c.get("/admin", headers=admin)).status_code == 200
+
+
+async def test_optional_principal() -> None:
+    app = FastAPI()
+    app.state.jwt_verifier = verifier()
+
+    @app.get("/catalog")
+    async def catalog(principal: OptionalPrincipal) -> dict[str, str]:
+        return {"who": str(principal.user_id) if principal else "anonymous"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        assert (await c.get("/catalog")).json() == {"who": "anonymous"}
+        user = {"Authorization": f"Bearer {make_token()}"}
+        assert (await c.get("/catalog", headers=user)).json() == {"who": str(USER_ID)}
+        bad = {"Authorization": "Bearer broken"}
+        assert (await c.get("/catalog", headers=bad)).status_code == 401

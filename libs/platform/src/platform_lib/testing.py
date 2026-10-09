@@ -1,6 +1,8 @@
 """Помощники для тестов сервисов: выпуск JWT, совместимых с auth-service."""
 
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -50,3 +52,44 @@ class TokenFactory:
     ) -> dict[str, str]:
         token = self.token(user_id, roles, email_verified=email_verified)
         return {"Authorization": f"Bearer {token}"}
+
+
+@contextmanager
+def mongo_replica_set() -> Iterator[str]:
+    """MongoDB 7 с replica set из одного узла в testcontainers (нужно для транзакций).
+
+    testcontainers — dev-зависимость, поэтому импорт внутри функции.
+    """
+    from pymongo import MongoClient
+    from testcontainers.core.container import DockerContainer
+
+    container = (
+        DockerContainer("mongo:7")
+        .with_command("--replSet rs0 --bind_ip_all")
+        .with_exposed_ports(27017)
+    )
+    with container:
+        host = container.get_container_host_ip()
+        port = container.get_exposed_port(27017)
+        url = f"mongodb://{host}:{port}/?directConnection=true"
+        client: MongoClient[dict[str, object]] = MongoClient(url, serverSelectionTimeoutMS=1000)
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                client.admin.command(
+                    "replSetInitiate",
+                    {"_id": "rs0", "members": [{"_id": 0, "host": "localhost:27017"}]},
+                )
+                break
+            except Exception as exc:
+                if "already initialized" in str(exc):
+                    break
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.5)
+        while not client.admin.command("hello").get("isWritablePrimary"):
+            if time.monotonic() > deadline:
+                raise TimeoutError("MongoDB did not become primary")
+            time.sleep(0.3)
+        client.close()
+        yield url
