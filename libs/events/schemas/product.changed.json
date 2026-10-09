@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "ProductChangedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "is_deleted": {
+          "title": "Is Deleted",
+          "type": "boolean"
+        },
+        "is_published": {
+          "title": "Is Published",
+          "type": "boolean"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "price": {
+          "pattern": "^\\d{1,10}\\.\\d{2}$",
+          "title": "Price",
+          "type": "string"
+        },
+        "product_id": {
+          "format": "uuid",
+          "title": "Product Id",
+          "type": "string"
+        },
+        "sku": {
+          "minLength": 1,
+          "title": "Sku",
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_id",
+        "sku",
+        "name",
+        "price",
+        "currency",
+        "is_published",
+        "is_deleted"
+      ],
+      "title": "ProductChangedPayload",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "format": "uuid",
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "product.changed",
+      "default": "product.changed",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "event_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Event Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/ProductChangedPayload"
+    },
+    "producer": {
+      "minLength": 1,
+      "title": "Producer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "title": "ProductChanged",
+  "type": "object"
+}

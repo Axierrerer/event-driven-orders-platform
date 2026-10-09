@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "InventoryReleasedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "order_id": {
+          "format": "uuid",
+          "title": "Order Id",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ReleaseReason"
+        },
+        "reservation_id": {
+          "format": "uuid",
+          "title": "Reservation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "reservation_id",
+        "reason"
+      ],
+      "title": "InventoryReleasedPayload",
+      "type": "object"
+    },
+    "ReleaseReason": {
+      "enum": [
+        "ORDER_CANCELLED",
+        "EXPIRED"
+      ],
+      "title": "ReleaseReason",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "format": "uuid",
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "inventory.released",
+      "default": "inventory.released",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "event_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Event Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/InventoryReleasedPayload"
+    },
+    "producer": {
+      "minLength": 1,
+      "title": "Producer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "title": "InventoryReleased",
+  "type": "object"
+}

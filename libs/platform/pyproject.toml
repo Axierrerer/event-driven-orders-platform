@@ -4,10 +4,22 @@ version = "0.1.0"
 description = "Общие механизмы сервисов: health, конфиг, логи, outbox, consumer"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "events",
     "fastapi>=0.115",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30",
+    "motor>=3.6",
+    "redis>=5.2",
+    "structlog>=24.4",
+    "confluent-kafka>=2.6",
+    "pyjwt[crypto]>=2.10",
+    "httpx>=0.27",
 ]
+
+[tool.uv.sources]
+events = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -21,3 +33,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = ["unit", "integration"]
+
+[tool.coverage.run]
+# SQLAlchemy async выполняет код в greenlet, to_thread — в потоках
+concurrency = ["greenlet", "thread"]
+omit = ["src/worker.py"]  # точка входа фонового процесса, проверяется на стенде

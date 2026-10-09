@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "UserVerificationRequestedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "format": "email",
+          "title": "Email",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "user_id": {
+          "format": "uuid",
+          "title": "User Id",
+          "type": "string"
+        },
+        "verification_url": {
+          "minLength": 1,
+          "title": "Verification Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id",
+        "email",
+        "verification_url",
+        "expires_at"
+      ],
+      "title": "UserVerificationRequestedPayload",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "format": "uuid",
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "user.verification-requested",
+      "default": "user.verification-requested",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "event_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Event Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/UserVerificationRequestedPayload"
+    },
+    "producer": {
+      "minLength": 1,
+      "title": "Producer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "title": "UserVerificationRequested",
+  "type": "object"
+}

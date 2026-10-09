@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "Role": {
+      "enum": [
+        "ROLE_USER",
+        "ROLE_MANAGER",
+        "ROLE_ADMIN"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "UserRolesChangedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_by": {
+          "format": "uuid",
+          "title": "Changed By",
+          "type": "string"
+        },
+        "roles": {
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "user_id": {
+          "format": "uuid",
+          "title": "User Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_id",
+        "roles",
+        "changed_by"
+      ],
+      "title": "UserRolesChangedPayload",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "format": "uuid",
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "user.roles-changed",
+      "default": "user.roles-changed",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "event_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Event Version",
+      "type": "integer"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/UserRolesChangedPayload"
+    },
+    "producer": {
+      "minLength": 1,
+      "title": "Producer",
+      "type": "string"
+    }
+  },
+  "required": [
+    "producer",
+    "correlation_id",
+    "payload"
+  ],
+  "title": "UserRolesChanged",
+  "type": "object"
+}
