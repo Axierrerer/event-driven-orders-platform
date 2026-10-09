@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+// Внутренний API склада для order-service.
+package orders.inventory.v1;
+
+service InventoryService {
+  // Проверка наличия без резервирования (быстрый отказ при оформлении заказа).
+  rpc CheckAvailability(CheckAvailabilityRequest) returns (CheckAvailabilityResponse);
+}
+
+message Item {
+  string product_id = 1;
+  int32 quantity = 2;
+}
+
+message CheckAvailabilityRequest {
+  repeated Item items = 1;
+}
+
+message ItemAvailability {
+  string product_id = 1;
+  int32 requested = 2;
+  // Доступно к резерву: on_hand - reserved; 0 для неизвестного товара.
+  int32 available = 3;
+}
+
+message CheckAvailabilityResponse {
+  bool available = 1;
+  repeated ItemAvailability items = 2;
+}
