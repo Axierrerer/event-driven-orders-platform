@@ -25,7 +25,8 @@ the others and publishes compensating events when something fails.
 | `notification-service` (emails, rate limiting) | ✅ done |
 | `api-gateway` (routing, JWT, rate limiting, unified Swagger) behind Nginx | ✅ done |
 | Observability: traces (OpenTelemetry → Jaeger), metrics (Prometheus), logs (Loki), Grafana dashboards, alerts | ✅ done |
-| Kubernetes (k3d + Helm), security scans, e2e | ⏳ planned |
+| Seed data, end-to-end scenarios, load test | ✅ done |
+| Kubernetes (k3d + Helm), security scans | ⏳ planned |
 
 ---
 
@@ -385,6 +386,33 @@ make obs-down
 
 Without `make obs-up` services still log `trace_id` but do not export traces.
 
+### Seed data, end-to-end tests, load test
+
+`make dev-up` runs `scripts/seed.py` (idempotent, also `make seed`): an administrator
+(`admin@example.com`), a manager (`manager@example.com`), 5 categories and 20 products with
+50 items in stock each. Passwords come from `SEED_ADMIN_PASSWORD` / `SEED_MANAGER_PASSWORD`
+(local defaults: `local-dev-admin-passphrase`, `local-dev-manager-passphrase`).
+
+```bash
+make e2e    # 8 end-to-end scenarios against the running stack (about 1.5 minutes)
+make load   # locust: ~500 RPS for 60 s through Nginx, report in docs/perf/report.md
+```
+
+End-to-end scenarios (`e2e/`) go through the public API only:
+
+1. registration → email confirmation from Mailpit → order → reserve → pay → ship → complete,
+   stock written off, five status emails;
+2. several customers race for the last item: one reservation, the rest cancelled
+   (`OUT_OF_STOCK`) with an email;
+3. cancel after reservation releases stock;
+4. reservation expiry cancels the order (`make e2e` shortens the TTL for the run);
+5. cancelling a paid order refunds and releases stock;
+6. the inventory worker is stopped while an order is placed — the order is reserved once it
+   is back;
+7. idempotency: the same `Idempotency-Key` returns the same order, a redelivered Kafka event
+   changes nothing;
+8. access rules: customers cannot ship, see other orders or order anonymously.
+
 ### Kafka and databases
 
 ```bash
@@ -513,6 +541,7 @@ unprivileged user, the image has a `HEALTHCHECK`.
 | `ModuleNotFoundError: src` in tests | Run pytest from the service directory: `cd <service> && uv run pytest` |
 | Missing dependencies after `git pull` | `make install` |
 | `make lint` says the gRPC code is outdated | `make proto` |
+| Random `401 invalid or expired token`, builds hang (macOS, after sleep) | The Docker VM clock lags behind: compare `date -u` with `docker run --rm alpine date -u`; restart Docker Desktop or sync the clock: `docker run --rm --privileged alpine date -u -s "@$(date -u +%s)"` |
 
 ## License
 

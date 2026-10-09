@@ -96,3 +96,24 @@ check-alerts: ## Проверить правила алертов Prometheus и 
 
 seed: ## Тестовые данные стенда: админ, менеджер, категории, товары, остатки (идемпотентно)
 	uv run python scripts/seed.py
+
+E2E_RESERVATION_TTL ?= 15
+
+e2e: ## Сквозные сценарии против стенда (на время прогона срок резерва сокращается)
+	RESERVATION_TTL_SECONDS=$(E2E_RESERVATION_TTL) $(COMPOSE) up -d --wait inventory-service inventory-worker
+	@status=0; (cd e2e && uv run pytest -q) || status=$$?; \
+		$(COMPOSE) up -d --wait inventory-service inventory-worker >/dev/null 2>&1; \
+		exit $$status
+
+LOAD_USERS ?= 100
+LOAD_DURATION ?= 60s
+
+load: ## Нагрузочный тест (locust, ~500 RPS) через Nginx; отчёт — docs/perf/report.md
+	GATEWAY_ANONYMOUS_RATE_CAPACITY=1000000 GATEWAY_USER_RATE_CAPACITY=1000000 \
+		$(COMPOSE) up -d --wait api-gateway nginx
+	@mkdir -p load/reports
+	@status=0; uv run locust -f load/locustfile.py --headless --host http://localhost:$${GATEWAY_HOST_PORT:-8000} \
+		-u $(LOAD_USERS) -r 20 -t $(LOAD_DURATION) --csv load/reports/run --only-summary || status=$$?; \
+		$(COMPOSE) up -d --wait api-gateway nginx >/dev/null 2>&1; \
+		uv run python scripts/perf_report.py load/reports/run_stats.csv docs/perf/report.md; \
+		exit $$status

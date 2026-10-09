@@ -363,6 +363,9 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification-service:8006
       AUTH_JWKS_URL: http://auth-service:8001/api/v1/auth/.well-known/jwks.json
       PRODUCT_GRPC_TARGET: product-service:50051
+      # Лимиты переопределяются для нагрузочного теста (make load)
+      ANONYMOUS_RATE_CAPACITY: ${GATEWAY_ANONYMOUS_RATE_CAPACITY:-40}
+      USER_RATE_CAPACITY: ${GATEWAY_USER_RATE_CAPACITY:-200}
 
   # ---------------- observability (профиль: make obs-up) ----------------
   otel-collector:

@@ -18,6 +18,9 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from events import Role
+from platform_lib.logging import get_logger
+
+log = get_logger(__name__)
 
 ISSUER = "auth-service"
 AUDIENCE = "orders-platform"
@@ -71,19 +74,26 @@ class JwksKeyProvider:
         self._min_refresh = min_refresh_interval_seconds
         self._client = client or httpx.AsyncClient(timeout=3.0)
         self._keys: dict[str, Any] = {}
-        self._fetched_at = 0.0
+        # None — ключи ещё не загружались (нельзя начинать с 0.0: monotonic() отсчитывается
+        # от старта системы и в «молодом» контейнере пустой кэш выглядел бы свежим)
+        self._fetched_at: float | None = None
         self._lock = asyncio.Lock()
 
     async def _refresh(self, *, force: bool) -> None:
         async with self._lock:
-            age = time.monotonic() - self._fetched_at
-            if (not force and age < self._cache_seconds) or (force and age < self._min_refresh):
+            if self._fetched_at is not None:
+                age = time.monotonic() - self._fetched_at
+                if (not force and age < self._cache_seconds) or (force and age < self._min_refresh):
+                    return
+            try:
+                response = await self._client.get(self._url)
+                response.raise_for_status()
+                keys = {jwk["kid"]: jwt.PyJWK.from_dict(jwk).key for jwk in response.json()["keys"]}
+            except (httpx.HTTPError, ValueError, KeyError, jwt.PyJWTError) as exc:
+                # Остаёмся на прежних ключах; запрос с неизвестным kid получит 401
+                log.warning("jwks_refresh_failed", url=self._url, error=str(exc))
                 return
-            response = await self._client.get(self._url)
-            response.raise_for_status()
-            self._keys = {
-                jwk["kid"]: jwt.PyJWK.from_dict(jwk).key for jwk in response.json()["keys"]
-            }
+            self._keys = keys
             self._fetched_at = time.monotonic()
 
     async def get_key(self, kid: str) -> Any:
