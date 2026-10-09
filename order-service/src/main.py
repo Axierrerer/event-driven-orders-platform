@@ -1,15 +1,78 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import grpc
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from platform_lib.auth import JwksKeyProvider, JwtVerifier
+from platform_lib.checks import postgres_check
 from platform_lib.health import HealthRegistry, health_router
+from platform_lib.logging import configure_logging
+from platform_lib.outbox import PgOutbox
+from src import db
+from src.api.errors import install_error_handlers
+from src.api.routes import router
 from src.config import Settings, get_settings
+from src.services.grpc_clients import GrpcCatalog, GrpcInventory
+from src.services.orders import OrderService
+from src.services.payment import FakePaymentGateway
+from src.services.ports import CatalogPort, InventoryPort, PaymentGateway
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def build_service(
+    settings: Settings,
+    engine: AsyncEngine,
+    *,
+    catalog: CatalogPort | None = None,
+    inventory: InventoryPort | None = None,
+    payments: PaymentGateway | None = None,
+) -> OrderService:
+    return OrderService(
+        db.make_session_factory(engine),
+        PgOutbox(db.outbox),
+        catalog
+        or GrpcCatalog(
+            grpc.aio.insecure_channel(settings.product_grpc_target),
+            timeout_seconds=settings.catalog_timeout_seconds,
+        ),
+        inventory
+        or GrpcInventory(
+            grpc.aio.insecure_channel(settings.inventory_grpc_target),
+            timeout_seconds=settings.inventory_timeout_seconds,
+        ),
+        payments or FakePaymentGateway(),
+    )
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    verifier: JwtVerifier | None = None,
+    catalog: CatalogPort | None = None,
+    inventory: InventoryPort | None = None,
+    payments: PaymentGateway | None = None,
+) -> FastAPI:
     settings = settings or get_settings()
+    configure_logging(settings.service_name, settings.log_level)
+
+    engine = db.make_engine(settings.database_url)
+    orders = build_service(
+        settings, engine, catalog=catalog, inventory=inventory, payments=payments
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        await engine.dispose()
+
+    app = FastAPI(title=settings.service_name, version="0.1.0", lifespan=lifespan)
+    app.state.jwt_verifier = verifier or JwtVerifier(JwksKeyProvider(settings.auth_jwks_url))
+    app.state.orders = orders
+
     health = HealthRegistry()
-    app = FastAPI(title=settings.service_name, version="0.1.0")
+    health.register("postgres", postgres_check(engine))
     app.include_router(health_router(health))
+    app.include_router(router)
+    install_error_handlers(app)
     return app
-
-
-app = create_app()
