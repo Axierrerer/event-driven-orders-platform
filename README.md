@@ -1,38 +1,50 @@
 # Event-Driven Order Processing Platform
 
-Платформа обработки заказов для небольшого e-commerce-магазина: каталог товаров,
-пользователи и роли, оформление заказов, учёт запасов и уведомления.
+**English** | [Русский](README.ru.md)
 
-Система состоит из микросервисов на Python (FastAPI, async). Сервисы общаются
-асинхронно через Kafka и синхронно через REST/gRPC. Заказ проходит путь
-от оформления до доставки как **сага на хореографии**: каждый сервис реагирует
-на события других и при сбое публикует компенсирующие события.
+An order processing platform for a small e-commerce shop: product catalog, users and roles,
+checkout, inventory and notifications.
 
-> **Статус:** готовы каркас платформы и локальный стенд. Все сервисы
-> собираются, запускаются и отвечают на health-check. Бизнес-логику сервисов
-> добавляем по плану ниже, см. раздел [Дорожная карта](#дорожная-карта).
+The system is a set of Python microservices (FastAPI, asyncio). Services talk to each other
+asynchronously through Kafka and synchronously through REST and gRPC. An order goes from
+checkout to delivery as a **choreography-based saga**: each service reacts to the events of
+the others and publishes compensating events when something fails.
 
----
+## Status
 
-## Содержание
-
-- [Архитектура](#архитектура)
-- [Стек](#стек)
-- [Структура репозитория](#структура-репозитория)
-- [Быстрый старт](#быстрый-старт)
-- [Как пользоваться стендом](#как-пользоваться-стендом)
-- [Разработка](#разработка)
-- [Правила кода](#правила-кода)
-- [Дорожная карта](#дорожная-карта)
-- [Решение проблем](#решение-проблем)
+| Component | State |
+|-----------|-------|
+| Local stack (`make dev-up`), monorepo, linters, tests | ✅ done |
+| `libs/events` — Kafka event contract | ✅ done |
+| `libs/platform` — outbox, idempotent consumer, auth, logging | ✅ done |
+| `auth-service` | ✅ done |
+| `user-service` | ✅ done |
+| `product-service` (REST + gRPC) | ✅ done |
+| `inventory-service`, `order-service` (saga), `notification-service` | ⏳ planned |
+| `api-gateway` routing, rate limiting, unified Swagger | ⏳ planned (health check only) |
+| Kubernetes (k3d + Helm), observability, security scans, e2e | ⏳ planned |
 
 ---
 
-## Архитектура
+## Contents
+
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Repository layout](#repository-layout)
+- [Quick start](#quick-start)
+- [Using the stack](#using-the-stack)
+- [Development](#development)
+- [Code conventions](#code-conventions)
+- [Git workflow](#git-workflow)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    client([Клиент]) -->|REST| gw[api-gateway]
+    client([Client]) -->|REST| gw[api-gateway]
 
     gw -->|REST| auth[auth-service]
     gw -->|REST| users[user-service]
@@ -40,46 +52,50 @@ flowchart LR
     gw -->|REST| inventory[inventory-service]
     gw -->|REST| orders[order-service]
 
-    orders -->|gRPC: наличие| inventory
-    orders -->|gRPC: цены| product
+    orders -->|gRPC: availability| inventory
+    orders -->|gRPC: prices| product
 
-    auth & users & product & inventory & orders <-->|события| kafka[(Kafka)]
+    auth & users & product & inventory & orders <-->|events| kafka[(Kafka)]
     kafka --> notify[notification-service]
     notify -->|SMTP| mail[(Email)]
 ```
 
-### Сервисы
+### Services
 
-| Сервис | Назначение | Хранилище | Протоколы |
-|--------|-----------|-----------|-----------|
-| `api-gateway` | Единая точка входа, проверка JWT, маршрутизация, rate-limiting | Redis | REST, gRPC |
-| `auth-service` | Регистрация, подтверждение email, JWT access + refresh | PostgreSQL | REST |
-| `user-service` | Профили пользователей, роли (`ROLE_USER`, `ROLE_MANAGER`, `ROLE_ADMIN`) | PostgreSQL | REST, Kafka |
-| `product-service` | Каталог: CRUD, публикация, поиск и фильтры | MongoDB | REST, gRPC, Kafka |
-| `inventory-service` | Остатки и резервы товаров | PostgreSQL | gRPC, Kafka |
-| `order-service` | Заказы и их жизненный цикл | PostgreSQL | REST, gRPC, Kafka |
-| `notification-service` | Письма о статусах заказа, rate-limit по пользователю | MongoDB, Redis | Kafka |
+| Service | Responsibility | Storage | Protocols |
+|---------|----------------|---------|-----------|
+| `api-gateway` | Single entry point, JWT check, routing, rate limiting | Redis | REST, gRPC |
+| `auth-service` | Registration, email verification, JWT access + refresh tokens | PostgreSQL | REST |
+| `user-service` | User profiles and roles (`ROLE_USER`, `ROLE_MANAGER`, `ROLE_ADMIN`) | PostgreSQL | REST, Kafka |
+| `product-service` | Catalog: CRUD, publishing, full-text search and filters | MongoDB, Redis | REST, gRPC, Kafka |
+| `inventory-service` | Stock levels and reservations | PostgreSQL | gRPC, Kafka |
+| `order-service` | Orders and their lifecycle | PostgreSQL | REST, gRPC, Kafka |
+| `notification-service` | Order status emails, per-user rate limiting | MongoDB, Redis | Kafka |
 
-### Жизненный цикл заказа
+Every service that publishes or consumes events runs as two containers from the same image:
+the API (`<service>`) and a background worker (`<service>-worker`) that relays the outbox to
+Kafka and consumes events.
+
+### Order lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NEW: заказ оформлен
+    [*] --> NEW: order placed
     NEW --> RESERVED: inventory.reserved
     NEW --> CANCELLED: inventory.reservation-failed
-    RESERVED --> PAID: оплата
-    RESERVED --> CANCELLED: отмена / резерв истёк
-    PAID --> SHIPPED: отгрузка
-    PAID --> CANCELLED: отмена с возвратом денег
+    RESERVED --> PAID: payment
+    RESERVED --> CANCELLED: cancelled / reservation expired
+    PAID --> SHIPPED: shipment
+    PAID --> CANCELLED: cancelled with refund
     SHIPPED --> COMPLETED
     COMPLETED --> [*]
     CANCELLED --> [*]
 ```
 
-### События Kafka
+### Kafka events
 
-| Топик | Ключ | Публикует | Читают |
-|-------|------|-----------|--------|
+| Topic | Key | Producer | Consumers |
+|-------|-----|----------|-----------|
 | `user.created` | user_id | auth-service | user-service, notification-service |
 | `user.verification-requested` | user_id | auth-service | notification-service |
 | `user.roles-changed` | user_id | user-service | auth-service |
@@ -90,307 +106,341 @@ stateDiagram-v2
 | `inventory.released` | order_id | inventory-service | order-service |
 | `order.status-changed` | order_id | order-service | inventory-service, notification-service |
 
-У каждого топика есть очередь ошибок `<топик>.dlq`: туда попадают сообщения,
-которые не удалось обработать после повторных попыток. Схемы событий — это
-Pydantic-модели в `libs/events`. Из них генерируется JSON Schema, которая
-регистрируется в Schema Registry с режимом совместимости `BACKWARD`.
+Each topic has a dead-letter topic `<topic>.dlq` for messages that could not be processed
+after retries. Event schemas are Pydantic models in `libs/events`; JSON Schemas generated
+from them are committed under `libs/events/schemas` and registered in Schema Registry with
+`BACKWARD` compatibility.
 
 ---
 
-## Стек
+## Tech stack
 
-| Область | Технологии |
-|---------|-----------|
-| Язык и веб | Python 3.12, FastAPI, Pydantic v2, pydantic-settings, Uvicorn |
-| Базы данных | PostgreSQL 16 (SQLAlchemy 2 async + asyncpg, Alembic), MongoDB 7 (Motor), Redis 7 (redis.asyncio) |
-| Обмен сообщениями | Apache Kafka (KRaft), Confluent Schema Registry, confluent-kafka |
-| Синхронные вызовы | REST (httpx), gRPC (grpcio) |
-| Зависимости | uv (workspace, единый `uv.lock`) |
-| Качество | ruff (линтер и форматирование), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov |
-| Инфраструктура | Docker, docker-compose, Kubernetes (k3d), Helm |
-| Почта (локально) | Mailpit |
+| Area | Technologies |
+|------|--------------|
+| Language and web | Python 3.12, FastAPI, Pydantic v2, pydantic-settings, Uvicorn |
+| Databases | PostgreSQL 16 (SQLAlchemy 2 async + asyncpg, Alembic), MongoDB 7 (Motor), Redis 7 (redis.asyncio) |
+| Messaging | Apache Kafka (KRaft), Confluent Schema Registry (JSON Schema), confluent-kafka |
+| Sync calls | REST (httpx), gRPC (grpcio) |
+| Auth | JWT RS256 + JWKS (PyJWT), Argon2id (pwdlib) |
+| Dependencies | uv (workspace, single `uv.lock`) |
+| Quality | ruff (lint + format), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
+| Infrastructure | Docker, docker-compose; Kubernetes (k3d) and Helm are planned |
+| Local mail | Mailpit |
 
 ---
 
-## Структура репозитория
+## Repository layout
 
 ```
 .
-├── pyproject.toml              # корень uv workspace + настройки ruff и mypy
-├── uv.lock                     # единый lock-файл зависимостей
-├── Makefile                    # все рабочие команды (make help)
-├── docker-compose.yml          # локальный стенд
-├── scripts/                    # все скрипты проекта
-│   ├── doctor.sh               #   проверка окружения разработчика
-│   ├── postgres-init-databases.sh # создание БД и ролей сервисов
-│   └── kafka-create-topics.sh  #   создание топиков и DLQ
+├── pyproject.toml              # uv workspace root + ruff and mypy settings
+├── uv.lock                     # single lock file
+├── Makefile                    # all project commands (make help)
+├── docker-compose.yml          # local stack
+├── proto/                      # .proto sources of internal gRPC APIs
+├── scripts/                    # all scripts
+│   ├── doctor.sh               #   developer environment check
+│   ├── generate-proto.sh       #   Python code generation from proto/
+│   ├── postgres-init-databases.sh  # databases and roles of the services
+│   └── kafka-create-topics.sh  #   topics and their DLQs
 ├── libs/
-│   ├── events/                 # контракт событий Kafka (Pydantic-модели)
-│   └── platform/               # общие механизмы: health-check, настройки, outbox, consumer
-└── <service>/                  # auth-service, user-service, product-service,
-    ├── pyproject.toml          # inventory-service, order-service,
-    ├── Dockerfile              # notification-service, api-gateway
+│   ├── events/                 # Kafka event contract (Pydantic models + JSON Schemas)
+│   ├── platform/               # outbox, consumer, JWT, logging, health, locks, workers
+│   └── proto/                  # generated gRPC code (package orders_proto)
+└── <service>/                  # auth-service, user-service, product-service, ...
+    ├── pyproject.toml
+    ├── Dockerfile
+    ├── alembic.ini, migrations/   # PostgreSQL services
     ├── src/
-    │   ├── main.py             # фабрика FastAPI-приложения
-    │   ├── config.py           # настройки из переменных окружения
-    │   ├── api/                # только HTTP: роуты, схемы запросов и ответов
-    │   ├── services/           # бизнес-сценарии, транзакции
-    │   ├── domain/             # чистые модели и правила, без I/O
-    │   └── repositories/       # доступ к базе данных
+    │   ├── main.py             # FastAPI application factory
+    │   ├── worker.py           # background process: outbox relay + Kafka consumer
+    │   ├── config.py           # settings from environment variables
+    │   ├── api/                # HTTP only: routes, request/response schemas
+    │   ├── services/           # use cases, transactions
+    │   ├── domain/             # pure models and rules, no I/O
+    │   └── repositories/       # database access
     └── tests/
         ├── unit/
         └── integration/
 ```
 
-Код сервиса лежит прямо в `<service>/src/` и импортируется как `src.*`.
-Каждый сервис входит в uv workspace как «виртуальный» участник: uv ставит его
-зависимости, а сам код не ставится пакетом. Библиотеки из `libs/` устанавливаются
-как пакеты `events` и `platform_lib`.
+Service code lives directly in `<service>/src/` and is imported as `src.*`. Each service is a
+virtual member of the uv workspace: uv installs its dependencies, but the service itself is not
+installed as a package. The libraries in `libs/` are installed as the packages `events`,
+`platform_lib` and `orders_proto`.
 
 ---
 
-## Быстрый старт
+## Quick start
 
-### 1. Что нужно установить
+### 1. Prerequisites
 
-| Инструмент | Версия | Зачем |
-|-----------|--------|-------|
-| [uv](https://docs.astral.sh/uv/) | ≥ 0.5 | Python и зависимости |
-| Docker Desktop / OrbStack / Colima | Engine ≥ 25, Compose v2 | локальный стенд |
-| GNU Make | ≥ 3.81 | команды проекта |
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [uv](https://docs.astral.sh/uv/) | ≥ 0.5 | Python and dependencies |
+| Docker Desktop / OrbStack / Colima | Engine ≥ 25, Compose v2 | local stack, testcontainers |
+| GNU Make | ≥ 3.81 | project commands |
 | git | ≥ 2.40 | — |
-| k3d, kubectl, helm, kubeseal | актуальные | локальный Kubernetes (нужны позже) |
-| trivy, grpcurl | актуальные | сканирование образов, ручная проверка gRPC |
+| k3d, kubectl, helm, kubeseal, trivy, grpcurl | recent | Kubernetes and scans (later stages) |
 
 **macOS:**
 
 ```bash
 xcode-select --install                                   # make, git
 brew install uv k3d kubectl helm kubeseal trivy grpcurl
-brew install --cask docker                               # или: brew install orbstack
+brew install --cask docker                               # or: brew install orbstack
 uv python install 3.12
 ```
 
-**Windows 10/11:** Docker Desktop с бэкендом WSL2. Дальше всё делается внутри
-WSL2 (Ubuntu) так же, как в Linux.
-
-**Linux / WSL2:**
+**Linux / Windows (WSL2):** install Docker, then:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.12
-# k3d, kubectl, helm, kubeseal, trivy — по официальным инструкциям
 ```
 
-Ресурсы: для стенда без observability хватает 2 CPU и 8 GB RAM, сам стенд
-занимает около 1 GB.
+The stack needs about 1 GB of RAM; 2 CPUs and 8 GB of RAM are enough for development.
 
-### 2. Установка проекта
+### 2. Install
 
 ```bash
-git clone <url-репозитория> event-driven-orders-platform
+git clone https://github.com/Axierrerer/event-driven-orders-platform.git
 cd event-driven-orders-platform
 
-make doctor     # проверит, что все инструменты на месте и Docker запущен
-make install    # uv sync --all-packages: все сервисы и библиотеки в одном .venv
+make doctor     # checks that all tools are installed and Docker is running
+make install    # uv sync --all-packages: all services and libraries in one .venv
 ```
 
-### 3. Запуск стенда
+### 3. Start the stack
 
 ```bash
 make dev-up
 ```
 
-Одна команда собирает образы, поднимает инфраструктуру, создаёт базы данных и
-топики, запускает все сервисы и ждёт, пока они станут healthy. Обычно это
-занимает около 30 секунд, при первом запуске дольше из-за скачивания образов.
+One command builds the images, starts the infrastructure, creates databases, Kafka topics and
+event schemas, runs migrations, starts all services and workers and waits until they are
+healthy. It takes about 30 seconds (longer on the first run while images are downloaded).
 
-Файл `.env` для запуска **не нужен**: у всех переменных в `docker-compose.yml`
-есть значения по умолчанию для локальной разработки. Если нужно что-то
-переопределить, например порт, который уже занят, создайте `.env` в корне:
+No `.env` file is needed: every variable in `docker-compose.yml` has a local default. To
+override something, e.g. a port that is already taken, create `.env` in the repository root:
 
 ```dotenv
 GATEWAY_HOST_PORT=8080
 POSTGRES_HOST_PORT=15432
 ```
 
-`.env` в git не попадает.
+`.env` is ignored by git.
 
-### 4. Остановка
+### 4. Create the first administrator
+
+Users with `ROLE_ADMIN` are not created through the public API. The user whose email matches
+`BOOTSTRAP_ADMIN_EMAIL` (default `admin@example.com`) gets the admin role automatically:
 
 ```bash
-make dev-down     # остановить, данные в томах сохраняются
-make dev-reset    # остановить и удалить все данные
+docker compose exec -e NEW_USER_PASSWORD='choose a long passphrase' \
+  auth-service python -m src.cli create-user --email admin@example.com --verified
+```
+
+The password is read from the environment, not from arguments, so it does not end up in the
+process list. A few seconds later the role arrives through Kafka (`user.created` →
+user-service → `user.roles-changed` → auth-service) and the next login token contains
+`ROLE_ADMIN`.
+
+### 5. Stop
+
+```bash
+make dev-down     # stop, data in volumes is kept
+make dev-reset    # stop and delete all data
 ```
 
 ---
 
-## Как пользоваться стендом
+## Using the stack
 
-### Адреса
+### Addresses
 
-| Что | Адрес |
-|-----|-------|
-| API gateway | http://localhost:8000 |
-| Swagger UI | http://localhost:8000/docs |
-| Mailpit (письма) | http://localhost:8025 |
+| What | Address |
+|------|---------|
+| auth-service + Swagger | http://localhost:8001, http://localhost:8001/docs |
+| user-service + Swagger | http://localhost:8002, http://localhost:8002/docs |
+| product-service + Swagger | http://localhost:8003, http://localhost:8003/docs |
+| api-gateway | http://localhost:8000 (health check only for now) |
+| Mailpit (emails) | http://localhost:8025 |
 | Schema Registry | http://localhost:8081 |
-| Kafka (с хоста) | `localhost:9094` |
-| PostgreSQL | `localhost:5432`, пользователь `postgres` |
+| Kafka (from the host) | `localhost:9094` |
+| PostgreSQL | `localhost:5432`, user `postgres` |
 | MongoDB | `mongodb://localhost:27017/?directConnection=true` |
 | Redis | `localhost:6379` |
-| Kafka UI (по желанию) | http://localhost:8088 — `docker compose --profile tools up -d kafka-ui` |
+| Kafka UI (optional) | http://localhost:8088 — `docker compose --profile tools up -d kafka-ui` |
 
-Инфраструктура слушает только `127.0.0.1`. Наружу из сервисов опубликован
-только api-gateway, остальные доступны внутри docker-сети по имени сервиса
-(`order-service:8005` и т. п.).
+All published ports listen on `127.0.0.1` only. Until api-gateway routing is implemented,
+services are called directly on ports 8001–8003.
 
-### Проверка, что всё работает
+### Example: account, profile, catalog
 
 ```bash
-curl localhost:8000/health/live    # {"status":"ok"} — процесс жив
-curl localhost:8000/health/ready   # проверка зависимостей; 503, если какая-то недоступна
-make dev-ps                        # состояние всех контейнеров
-make dev-logs                      # логи всех сервисов
-docker compose logs -f order-service   # логи одного сервиса
+# Register and log in
+curl -s localhost:8001/api/v1/auth/register -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}'
+
+TOKEN=$(curl -s localhost:8001/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"email": "buyer@example.com", "password": "a long buyer passphrase"}' \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+
+# Profile (created asynchronously from the user.created event)
+curl -s localhost:8002/api/v1/users/me -H "Authorization: Bearer $TOKEN"
+
+# Catalog search: public, no token needed
+curl -s 'localhost:8003/api/v1/products?q=teapot&price_max=2000&sort=price'
 ```
 
-### Kafka
+The email verification link is sent as the `user.verification-requested` event; the email
+itself will be delivered by notification-service (planned). Admin operations (creating
+products, managing roles) need a token of the administrator from step 4.
+
+Main endpoints (full list in each service's Swagger):
+
+| Service | Endpoints |
+|---------|-----------|
+| auth | `POST /api/v1/auth/register`, `/verify-email`, `/resend-verification`, `/login`, `/refresh`, `/logout`, `/password`; `GET /api/v1/auth/.well-known/jwks.json` |
+| user | `GET/PATCH /api/v1/users/me`; `GET /api/v1/users` (staff); `GET /api/v1/users/{id}`; `PUT /api/v1/users/{id}/roles`, `DELETE /api/v1/users/{id}` (admin) |
+| product | `GET /api/v1/products` (search), `GET /api/v1/products/{id}`; `POST/PUT/PATCH/DELETE` (admin, `If-Match` supported); `POST /{id}/publish`, `/{id}/unpublish` (admin, manager); `/api/v1/categories` |
+| product gRPC | `orders.catalog.v1.ProductService/GetProduct`, `GetProducts` on port 50051 (internal network) |
+
+### Checks and logs
 
 ```bash
-# список топиков
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list
+make dev-ps                              # container states
+make dev-logs                            # logs of the whole stack
+docker compose logs -f product-worker    # logs of one container
+curl localhost:8001/health/ready         # 503 if a dependency is down
+```
 
-# читать события топика
+### Kafka and databases
+
+```bash
+# List topics
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+# Read a topic from the beginning
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 --topic order.created --from-beginning
-```
+  --bootstrap-server localhost:9092 --topic user.created --from-beginning
 
-### Базы данных
-
-У каждого PostgreSQL-сервиса своя база и своя роль: `auth`, `users`, `inventory`,
-`orders`. Пароли по умолчанию заданы в `docker-compose.yml`.
-
-```bash
-docker compose exec postgres psql -U postgres -d orders
+docker compose exec postgres psql -U postgres -d auth   # databases: auth, users, inventory, orders
 docker compose exec mongo mongosh catalog
 ```
 
 ---
 
-## Разработка
+## Development
 
-### Команды
-
-```bash
-make help              # список всех команд
-make lint              # ruff check + проверка формата + правила слоёв (import-linter)
-make format            # автоисправление и форматирование
-make typecheck         # mypy (strict) по каждому пакету
-make test              # unit-тесты всех пакетов
-make test-integration  # интеграционные тесты (нужен Docker)
-```
-
-Работа с одним сервисом:
+### Commands
 
 ```bash
-cd order-service
-uv run pytest -q                                  # тесты с покрытием
-uv run uvicorn src.main:app --reload --port 8005  # запуск без Docker
-uv run lint-imports                               # правила слоёв сервиса
+make help              # list of all commands
+make lint              # ruff, format check, layer contracts, event schemas and gRPC code up to date
+make format            # auto-fix and format
+make typecheck         # mypy (strict) for every package
+make test              # unit tests of all packages
+make test-integration  # integration tests (Docker required, testcontainers)
+make export-schemas    # regenerate event JSON Schemas after changing libs/events
+make proto             # regenerate gRPC code after changing proto/
+make register-schemas  # register schemas in Schema Registry (done by make dev-up)
+make compat-schemas    # check model compatibility with the registry
 ```
 
-### Зависимости
-
-Зависимость добавляется в нужный пакет, lock-файл общий:
+Working on one service:
 
 ```bash
-cd order-service && uv add sqlalchemy        # зависимость сервиса
-uv add --dev <пакет>                         # инструмент разработки (из корня)
+cd product-service
+uv run pytest -q                                              # all tests with coverage
+uv run pytest -q -m unit                                      # unit tests only
+uv run uvicorn src.main:create_app --factory --reload --port 8003
+uv run lint-imports                                           # layer contracts
 ```
 
-`uv.lock` руками не редактируется, только через `uv add` / `uv lock`.
+Integration tests start PostgreSQL, MongoDB (replica set), Redis and Kafka in containers
+themselves; the `make dev-up` stack is only needed for the Schema Registry tests in
+`libs/events`.
 
-### Новый сервис
-
-1. Скопируйте структуру существующего сервиса: `pyproject.toml`, `Dockerfile`,
-   `src/`, `tests/`.
-2. Добавьте сервис в `SERVICES` в `Makefile` и в `docker-compose.yml`.
-3. Если сервису нужна своя база PostgreSQL, добавьте её в
-   `scripts/postgres-init-databases.sh`.
-
-### Docker-образы
-
-Образы собираются из корня репозитория, потому что им нужны `libs/` и `uv.lock`:
+### Dependencies
 
 ```bash
-docker build -f order-service/Dockerfile -t orders/order-service:dev .
+cd order-service && uv add sqlalchemy    # service dependency
+uv add --dev <package>                   # development tool (from the root)
 ```
 
-Образ двухстадийный: зависимости ставятся через `uv sync --frozen --no-dev`,
-процесс запускается под непривилегированным пользователем, у образа есть
-`HEALTHCHECK`.
+`uv.lock` is never edited by hand.
+
+### Database migrations
+
+Migrations are applied automatically when a service container starts (`alembic upgrade head`).
+New migration after changing tables in `src/db.py`:
+
+```bash
+cd user-service
+DATABASE_URL=postgresql+asyncpg://users:local-dev-users@localhost:5432/users \
+  uv run alembic revision --autogenerate -m "describe the change"
+```
+
+Applied migrations are never edited — create a new one instead.
+
+### Adding a service
+
+1. Copy the layout of an existing service: `pyproject.toml`, `Dockerfile`, `src/`, `tests/`.
+2. Add the service to `SERVICES` in the `Makefile` and to `docker-compose.yml` (API and worker).
+3. If it needs its own PostgreSQL database, add it to `scripts/postgres-init-databases.sh`.
+
+### Docker images
+
+Images are built from the repository root because they need `libs/` and `uv.lock`:
+
+```bash
+docker build -f product-service/Dockerfile -t orders/product-service:dev .
+```
+
+Two-stage build: dependencies via `uv sync --frozen --no-dev`, the process runs as an
+unprivileged user, the image has a `HEALTHCHECK`.
 
 ---
 
-## Правила кода
+## Code conventions
 
-- **Слои.** `api/` отвечает только за HTTP, вся логика живёт в `services/`,
-  доступ к БД — в `repositories/`, а `domain/` не зависит от I/O. Правила
-  проверяет import-linter в `make lint`.
-- **Деньги.** Только `Decimal`, никогда `float`. В PostgreSQL — `NUMERIC(12,2)`,
-  в MongoDB — `Decimal128`, в JSON и событиях — строка (`"10.10"`).
-- **Время.** Только `datetime` с часовым поясом UTC, в PostgreSQL —
-  `TIMESTAMPTZ`. Naive datetime запрещён (ruff, правила `DTZ`).
-- **События** публикуются только через transactional outbox, в той же транзакции,
-  что и изменение данных.
-- **Идемпотентность.** Каждый consumer сохраняет `event_id` в `processed_events`,
-  повторно доставленное событие игнорируется. Offset Kafka коммитится только
-  после успешной обработки.
-- **Контракт событий** меняется только в `libs/events` и только обратно
-  совместимо: новые поля добавляются со значением по умолчанию, существующие
-  поля не удаляются и не переименовываются.
-- **Секреты** не хранятся в коде, тестах и логах. Локальные значения задаются
-  в `.env` (не коммитится).
-- **Перед PR** должны проходить `make lint typecheck test`.
+- **Layers.** `api/` handles HTTP only, logic lives in `services/`, database access in
+  `repositories/`, `domain/` has no I/O. import-linter enforces this in `make lint`.
+- **Money.** Always `Decimal`, never `float`: `NUMERIC(12,2)` in PostgreSQL, `Decimal128` in
+  MongoDB, a string (`"10.10"`) in JSON, events and gRPC.
+- **Time.** Timezone-aware `datetime` in UTC only; `TIMESTAMPTZ` in PostgreSQL.
+- **Events** are published only through the transactional outbox, in the same transaction as
+  the data change.
+- **Idempotency.** Every consumer stores `event_id` in `processed_events` in the handler's
+  transaction; redelivered events are skipped. The Kafka offset is committed after processing.
+- **Event contract** changes only in `libs/events` and only backward compatibly: new fields
+  get defaults, existing fields are not removed or renamed.
+- **Secrets** never go into code, tests or logs; logs mask passwords and tokens automatically.
 
----
+## Git workflow
 
-## Дорожная карта
-
-- [x] Каркас: uv workspace, 7 сервисов с health-check, Dockerfile, линтеры, тесты
-- [x] Локальный стенд одной командой: `make dev-up`
-- [ ] Контракт событий в `libs/events`, регистрация схем в Schema Registry
-- [ ] Общая библиотека: outbox, идемпотентный consumer, DLQ, структурные логи
-- [ ] auth-service: регистрация, подтверждение email, JWT access + refresh
-- [ ] user-service: профили и роли
-- [ ] product-service: каталог, поиск и фильтры, gRPC
-- [ ] inventory-service: остатки, резервы, gRPC
-- [ ] order-service: заказы и сага
-- [ ] notification-service: письма, rate-limit
-- [ ] api-gateway: маршрутизация, JWT, rate-limit, единый Swagger
-- [ ] CI/CD на GitHub Actions
-- [ ] Kubernetes: k3d + Helm, sealed-secrets
-- [ ] Observability: OpenTelemetry, Jaeger, Prometheus, Grafana, Loki
-- [ ] Безопасность: Trivy, pip-audit, OWASP-проверки
-- [ ] E2E-сценарии и нагрузочный тест
+- `main` is protected: changes only through pull requests.
+- One feature — one branch (`feat/...`, `fix/...`, `docs/...`, `chore/...`) and one PR.
+- Commit messages are in English.
+- Before opening a PR: `make lint typecheck test` and the integration tests of the changed
+  packages.
 
 ---
 
-## Решение проблем
+## Troubleshooting
 
-| Симптом | Что делать |
-|---------|-----------|
-| `make dev-up`: `port is already allocated` | Порт занят другим процессом. Переопределите его в `.env` (`POSTGRES_HOST_PORT=15432` и т. п.) |
-| `Cannot connect to the Docker daemon` | Запустите Docker Desktop / OrbStack / Colima, затем `make doctor` |
-| Сервис в статусе `unhealthy` | `docker compose logs <service>`; затем `make dev-down && make dev-up` |
-| Нужно начать с чистыми данными | `make dev-reset && make dev-up` |
-| `ModuleNotFoundError: src` в тестах | Запускайте pytest из каталога сервиса: `cd <service> && uv run pytest` |
-| После `git pull` не хватает зависимостей | `make install` |
+| Symptom | What to do |
+|---------|------------|
+| `make dev-up`: `port is already allocated` | Override the port in `.env` (`POSTGRES_HOST_PORT=15432`, `AUTH_SERVICE_HOST_PORT=18001`, ...) |
+| `Cannot connect to the Docker daemon` | Start Docker Desktop / OrbStack / Colima, then `make doctor` |
+| A container is `unhealthy` | `docker compose logs <service>`, then `make dev-down && make dev-up` |
+| Need clean data | `make dev-reset && make dev-up` |
+| `ModuleNotFoundError: src` in tests | Run pytest from the service directory: `cd <service> && uv run pytest` |
+| Missing dependencies after `git pull` | `make install` |
+| `make lint` says the gRPC code is outdated | `make proto` |
 
----
-
-## Лицензия
+## License
 
 [MIT](LICENSE)

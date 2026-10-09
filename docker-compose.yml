@@ -192,6 +192,8 @@ services:
   auth-service:
     <<: *service-defaults
     build: { context: ., dockerfile: auth-service/Dockerfile }
+    ports:
+      - "127.0.0.1:${AUTH_SERVICE_HOST_PORT:-8001}:8001"
     environment: &auth-env
       <<: *service-env
       DATABASE_URL: postgresql+asyncpg://auth:${AUTH_DB_PASSWORD:-local-dev-auth}@postgres:5432/auth
@@ -217,6 +219,8 @@ services:
   user-service:
     <<: *service-defaults
     build: { context: ., dockerfile: user-service/Dockerfile }
+    ports:
+      - "127.0.0.1:${USER_SERVICE_HOST_PORT:-8002}:8002"
     environment: &user-env
       <<: *service-env
       DATABASE_URL: postgresql+asyncpg://users:${USERS_DB_PASSWORD:-local-dev-users}@postgres:5432/users
@@ -236,6 +240,8 @@ services:
   product-service:
     <<: *service-defaults
     build: { context: ., dockerfile: product-service/Dockerfile }
+    ports:
+      - "127.0.0.1:${PRODUCT_SERVICE_HOST_PORT:-8003}:8003"
     environment: &product-env
       <<: *service-env
       MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
