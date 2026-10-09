@@ -24,7 +24,8 @@ the others and publishes compensating events when something fails.
 | `order-service` with the order saga | ✅ done |
 | `notification-service` (emails, rate limiting) | ✅ done |
 | `api-gateway` (routing, JWT, rate limiting, unified Swagger) behind Nginx | ✅ done |
-| Kubernetes (k3d + Helm), observability, security scans, e2e | ⏳ planned |
+| Observability: traces (OpenTelemetry → Jaeger), metrics (Prometheus), logs (Loki), Grafana dashboards, alerts | ✅ done |
+| Kubernetes (k3d + Helm), security scans, e2e | ⏳ planned |
 
 ---
 
@@ -129,6 +130,7 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 | Dependencies | uv (workspace, single `uv.lock`) |
 | Quality | ruff (lint + format), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
 | Infrastructure | Docker, docker-compose, Nginx; Kubernetes (k3d) and Helm are planned |
+| Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Loki, Grafana Alloy |
 | Local mail | Mailpit |
 
 ---
@@ -142,6 +144,7 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 ├── Makefile                    # all project commands (make help)
 ├── docker-compose.yml          # local stack
 ├── nginx/nginx.conf            # public entry point: reverse proxy + load balancer
+├── observability/             # Collector, Prometheus (+ alerts), Loki/Alloy, Grafana
 ├── proto/                      # .proto sources of internal gRPC APIs
 ├── scripts/                    # all scripts
 │   ├── doctor.sh               #   developer environment check
@@ -355,6 +358,33 @@ docker compose logs -f product-worker    # logs of one container
 curl localhost:8001/health/ready         # 503 if a dependency is down
 ```
 
+### Observability
+
+```bash
+make obs-up      # the stack + OpenTelemetry Collector, Jaeger, Prometheus, Loki, Alloy, Grafana
+make obs-down
+```
+
+| Tool | Address | What you get |
+|------|---------|--------------|
+| Grafana | http://localhost:3000 | dashboards in the *Orders Platform* folder: requests (RED), order saga, Kafka and outbox; logs (Loki) and traces (Jaeger) in Explore |
+| Jaeger | http://localhost:16686 | one trace per request across services: gateway → order-service → Kafka → inventory → order → notification, incl. gRPC calls |
+| Prometheus | http://localhost:9090 | metrics of every API replica and worker; alert state at `/alerts` |
+
+- **Traces.** Every service exports spans over OTLP. The trace context travels with events:
+  the outbox stores `traceparent` in Kafka headers and consumers continue the same trace.
+- **Logs.** JSON logs carry `trace_id` / `span_id`; Alloy ships container logs to Loki.
+  In Grafana a log line links to its trace and a span links to its logs.
+- **Metrics.** HTTP (rate, errors, latency by route), Kafka (consumer lag, processed events,
+  DLQ), outbox (pending records, oldest record age) and business metrics (orders created,
+  status transitions, saga decision time, stuck orders, reservations, emails).
+- **Alerts.** `HighErrorRate`, `HighLatency`, `OutboxStuck`, `ConsumerLag`, `DLQNotEmpty`,
+  `SagaStuck` — rules in `observability/prometheus/alerts.yml`, unit tests run with
+  `make check-alerts`. Try it: `docker compose stop kafka`, register a user, and
+  `OutboxStuck` fires within about two minutes.
+
+Without `make obs-up` services still log `trace_id` but do not export traces.
+
 ### Kafka and databases
 
 ```bash
@@ -386,6 +416,8 @@ make export-schemas    # regenerate event JSON Schemas after changing libs/event
 make proto             # regenerate gRPC code after changing proto/
 make register-schemas  # register schemas in Schema Registry (done by make dev-up)
 make compat-schemas    # check model compatibility with the registry
+make obs-up           # stack with Jaeger, Prometheus, Grafana, Loki
+make check-alerts     # validate Prometheus alert rules and their unit tests
 ```
 
 Working on one service:

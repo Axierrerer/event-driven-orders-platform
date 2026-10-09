@@ -35,6 +35,17 @@ async def main() -> None:
             except TimeoutError:
                 pass
 
+    async def stuck_orders(stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            try:
+                await orders.report_stuck_orders()
+            except Exception:
+                log.exception("stuck_orders_report_failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=30)
+            except TimeoutError:
+                pass
+
     await run_pg_worker(
         settings,
         engine=engine,
@@ -46,7 +57,7 @@ async def main() -> None:
             "inventory.reservation-failed": orders.on_reservation_failed,
             "inventory.released": orders.on_inventory_released,
         },
-        extra_tasks=[cleanup],
+        extra_tasks=[cleanup, stuck_orders],
     )
 
 

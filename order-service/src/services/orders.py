@@ -47,6 +47,12 @@ from src.domain.models import (
 )
 from src.domain.status import Action, InvalidTransitionError, next_status
 from src.repositories.orders import OrderRepository
+from src.services.metrics import (
+    ORDER_TRANSITIONS,
+    ORDERS_CREATED,
+    ORDERS_STUCK_NEW,
+    SAGA_RESERVATION_SECONDS,
+)
 from src.services.ports import CatalogPort, InventoryPort, PaymentGateway
 
 log = get_logger(__name__)
@@ -135,6 +141,7 @@ class OrderService:
                 raise
             return CreateResult(existing, created=False)
 
+        ORDERS_CREATED.inc()
         log.info("order_created", order_id=str(order.id), total=str(order.total_amount))
         async with self._session_factory() as session:
             saved = await OrderRepository(session).get(order.id, with_history=True)
@@ -332,6 +339,7 @@ class OrderService:
             log.warning("reserved_for_unknown_order", order_id=str(event.payload.order_id))
             return
         if order.status is OrderStatus.NEW:
+            self._observe_saga(order, "reserved")
             await repo.set_reserved_until(order.id, event.payload.expires_at)
             await self._change(session, order, Action.RESERVE, actor=SAGA_ACTOR, reason=None)
         elif order.status is OrderStatus.CANCELLED:
@@ -352,6 +360,7 @@ class OrderService:
         repo = OrderRepository(session)
         order = await repo.get(event.payload.order_id, for_update=True)
         if order is not None and order.status is OrderStatus.NEW:
+            self._observe_saga(order, "cancelled")
             await self._change(
                 session,
                 order,
@@ -395,6 +404,7 @@ class OrderService:
             at=self._now(),
         )
         await self._publish(session, order, order.status, new_status, reason=reason)
+        ORDER_TRANSITIONS.labels(str(new_status), "saga" if actor == SAGA_ACTOR else "user").inc()
         log.info(
             "order_status_changed",
             order_id=str(order.id),
@@ -426,6 +436,19 @@ class OrderService:
                 ),
             ),
         )
+
+    def _observe_saga(self, order: Order, outcome: str) -> None:
+        elapsed = (self._now() - order.created_at).total_seconds()
+        SAGA_RESERVATION_SECONDS.labels(outcome).observe(max(elapsed, 0.0))
+
+    async def report_stuck_orders(self, threshold: timedelta = timedelta(minutes=2)) -> int:
+        """Заказы в NEW дольше порога: сага не получила ответ склада (алерт SagaStuck)."""
+        async with self._session_factory() as session:
+            count = await OrderRepository(session).count_in_status_before(
+                OrderStatus.NEW, self._now() - threshold
+            )
+        ORDERS_STUCK_NEW.set(count)
+        return count
 
     async def cleanup_idempotency_keys(self, ttl: timedelta) -> int:
         async with self._session_factory() as session, session.begin():

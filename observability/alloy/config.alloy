@@ -1,0 +1,45 @@
+// Логи контейнеров стенда → Loki. JSON-логи сервисов разбираются в поля.
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "platform" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "orders-platform"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "platform" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.platform.output
+  forward_to = [loki.process.json.receiver]
+}
+
+loki.process "json" {
+  stage.json {
+    expressions = { level = "level", service = "service", trace_id = "trace_id" }
+  }
+  stage.labels {
+    values = { level = "", service = "" }
+  }
+  // trace_id — не метка (высокая кардинальность), а structured metadata
+  stage.structured_metadata {
+    values = { trace_id = "" }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
