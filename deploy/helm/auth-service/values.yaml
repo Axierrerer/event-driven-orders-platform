@@ -1,0 +1,43 @@
+# Значения по умолчанию (prod-подобные); окружения переопределяют их в platform/values-*.yaml
+global:
+  image: { registry: k3d-registry.localhost:5050, tag: latest }
+  secretName: platform-secrets
+  environment: k8s
+  logLevel: INFO
+  kafkaBootstrap: kafka:9092
+  schemaRegistryUrl: http://schema-registry:8081
+  otlpEndpoint: ""
+
+image:
+  tag: ""  # пусто — global.image.tag
+port: 8001
+grpcPort: null
+replicas: 2
+hpa: { enabled: true, minReplicas: 2, maxReplicas: 4, cpuUtilization: 70 }
+pdb: { minAvailable: 1 }
+resources:
+  requests: { cpu: 100m, memory: 160Mi }
+  limits: { cpu: '1', memory: 384Mi }
+migrations: { enabled: true }
+worker:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 320Mi }
+serviceMonitor: { enabled: true }
+# Секреты — только имена ключей Secret (создаёт make inject-secrets)
+secretEnv:
+  - AUTH_DB_PASSWORD
+  - REDIS_PASSWORD
+env:
+  DATABASE_URL: "postgresql+asyncpg://auth:$(AUTH_DB_PASSWORD)@postgres:5432/auth"
+  APP_BASE_URL: "https://api.orders.localhost"
+# Ключ подписи JWT — из Secret auth-jwt-key (один на все реплики)
+volumes:
+  - name: jwt-key
+    secret: { secretName: auth-jwt-key, defaultMode: 0440 }
+volumeMounts:
+  - name: jwt-key
+    mountPath: /var/lib/auth/keys
+    readOnly: true

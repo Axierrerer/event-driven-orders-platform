@@ -1,0 +1,12 @@
+# Локальный k3d: по одной реплике, HPA может поднять до 4
+global:
+  logLevel: INFO
+auth-service: &dev
+  hpa: { enabled: true, minReplicas: 1, maxReplicas: 4, cpuUtilization: 70 }
+  serviceMonitor: { enabled: false }
+user-service: *dev
+product-service: *dev
+inventory-service: *dev
+order-service: *dev
+notification-service: *dev
+api-gateway: *dev

@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load scan
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load scan k3d-up k3d-down inject-secrets helm-check k3d-zero-downtime
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -124,3 +124,20 @@ load: ## Нагрузочный тест (locust, ~500 RPS) через Nginx; о
 
 scan: ## Безопасность: pip-audit, gitleaks, trivy (конфиги и образы)
 	./scripts/scan.sh
+
+# ---------------- Kubernetes (k3d + Helm) ----------------
+k3d-up: ## Кластер k3d со всей платформой (https://api.orders.localhost)
+	./scripts/k3d-up.sh
+
+k3d-down: ## Удалить кластер k3d и его registry
+	k3d cluster delete orders
+	-k3d registry delete k3d-registry.localhost
+
+inject-secrets: ## Локальные секреты → SealedSecret в кластере
+	./scripts/inject-secrets.sh
+
+helm-check: ## helm lint и kubeconform для всех чартов
+	./scripts/helm-check.sh
+
+k3d-zero-downtime: ## Под нагрузкой: scale order-service ×4 и helm upgrade — без 5xx
+	./scripts/k8s-zero-downtime.sh

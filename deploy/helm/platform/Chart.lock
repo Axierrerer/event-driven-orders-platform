@@ -1,0 +1,24 @@
+dependencies:
+- name: auth-service
+  repository: file://../auth-service
+  version: 0.1.0
+- name: user-service
+  repository: file://../user-service
+  version: 0.1.0
+- name: product-service
+  repository: file://../product-service
+  version: 0.1.0
+- name: inventory-service
+  repository: file://../inventory-service
+  version: 0.1.0
+- name: order-service
+  repository: file://../order-service
+  version: 0.1.0
+- name: notification-service
+  repository: file://../notification-service
+  version: 0.1.0
+- name: api-gateway
+  repository: file://../api-gateway
+  version: 0.1.0
+digest: sha256:a33143d6575fcbd4be7d5a801578b65e14d350498432b0c53785dca33f456b84
+generated: "2026-10-10T00:34:30.550362+03:00"

@@ -1,0 +1,14 @@
+# Prod-подобное окружение: минимум 2 реплики, HPA до 4, ServiceMonitor включён
+global:
+  logLevel: WARNING
+auth-service: &prod
+  hpa: { enabled: true, minReplicas: 2, maxReplicas: 4, cpuUtilization: 70 }
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: '1', memory: 512Mi }
+user-service: *prod
+product-service: *prod
+inventory-service: *prod
+order-service: *prod
+notification-service: *prod
+api-gateway: *prod

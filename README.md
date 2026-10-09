@@ -27,7 +27,7 @@ the others and publishes compensating events when something fails.
 | Observability: traces (OpenTelemetry → Jaeger), metrics (Prometheus), logs (Loki), Grafana dashboards, alerts | ✅ done |
 | Seed data, end-to-end scenarios, load test | ✅ done |
 | Security: dependency/secret/image scans, access matrix, OWASP ZAP | ✅ done |
-| Kubernetes (k3d + Helm) | ⏳ planned |
+| Kubernetes (k3d + Helm), sealed-secrets, TLS 1.3 ingress | ✅ done |
 
 ---
 
@@ -38,6 +38,7 @@ the others and publishes compensating events when something fails.
 - [Repository layout](#repository-layout)
 - [Quick start](#quick-start)
 - [Using the stack](#using-the-stack)
+- [Kubernetes](#kubernetes)
 - [Development](#development)
 - [Code conventions](#code-conventions)
 - [Git workflow](#git-workflow)
@@ -131,7 +132,7 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 | Auth | JWT RS256 + JWKS (PyJWT), Argon2id (pwdlib) |
 | Dependencies | uv (workspace, single `uv.lock`) |
 | Quality | ruff (lint + format), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
-| Infrastructure | Docker, docker-compose, Nginx; Kubernetes (k3d) and Helm are planned |
+| Infrastructure | Docker, docker-compose, Nginx; Kubernetes (k3d), Helm, cert-manager, sealed-secrets |
 | Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Loki, Grafana Alloy |
 | Local mail | Mailpit |
 
@@ -145,6 +146,8 @@ from them are committed under `libs/events/schemas` and registered in Schema Reg
 ├── uv.lock                     # single lock file
 ├── Makefile                    # all project commands (make help)
 ├── docker-compose.yml          # local stack
+├── deploy/helm/                # Helm charts: service-lib, <service>, platform, infra
+├── .secrets.example/           # structure of local secrets for make inject-secrets
 ├── nginx/nginx.conf            # public entry point: reverse proxy + load balancer
 ├── observability/             # Collector, Prometheus (+ alerts), Loki/Alloy, Grafana
 ├── proto/                      # .proto sources of internal gRPC APIs
@@ -191,7 +194,7 @@ installed as a package. The libraries in `libs/` are installed as the packages `
 | Docker Desktop / OrbStack / Colima | Engine ≥ 25, Compose v2 | local stack, testcontainers |
 | GNU Make | ≥ 3.81 | project commands |
 | git | ≥ 2.40 | — |
-| k3d, kubectl, helm, kubeseal, trivy, grpcurl | recent | Kubernetes and scans (later stages) |
+| k3d, kubectl, helm, kubeseal, trivy, grpcurl | recent | Kubernetes and security scans |
 
 **macOS:**
 
@@ -443,6 +446,54 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
 docker compose exec postgres psql -U postgres -d auth   # databases: auth, users, inventory, orders
 docker compose exec mongo mongosh catalog
 ```
+
+---
+
+## Kubernetes
+
+The same images run in a local Kubernetes cluster (k3d) installed with Helm. Stop the compose
+stack first (`make dev-down`): both together need more memory than Docker Desktop usually has.
+
+```bash
+make k3d-up               # cluster + cert-manager + sealed-secrets + images + secrets + charts
+curl -k https://api.orders.localhost/health/ready
+make k3d-zero-downtime    # 50 RPS load while scaling order-service to 4 and upgrading the images
+make helm-check           # helm lint + helm template | kubeconform for every chart
+make k3d-down             # delete the cluster and its registry
+```
+
+What `make k3d-up` does (re-running it upgrades what is already there):
+
+1. Creates the k3d cluster `orders` (1 server + 2 agents) with the registry
+   `k3d-registry.localhost:5050` (port 5000 is taken by AirPlay on macOS) and ports 80/443.
+2. Installs cert-manager and the sealed-secrets controller.
+3. Builds the service images and pushes them with the current git commit as the tag.
+4. `make inject-secrets`: every `.secrets/dev/<name>.env` and `.secrets/dev/<name>/` becomes a
+   SealedSecret `<name>` (`kubectl create --dry-run | kubeseal | kubectl apply`). On the first run
+   `.secrets/dev` is created from `.secrets.example/dev` with random passwords and a new JWT
+   signing key. `.secrets/` never goes to git; values files contain only secret names.
+5. Release `infra`: PostgreSQL, MongoDB (replica set), Redis, Kafka (KRaft), Schema Registry, Mailpit.
+6. Release `platform`: the services, their workers, migrations, ingress and TLS.
+
+Charts (`deploy/helm/`):
+
+| Chart | Contents |
+|-------|----------|
+| `service-lib` | library chart: Deployment (API), worker Deployment, Service, HPA, PDB, migration Job, ServiceMonitor |
+| `<service>` | thin chart of a service: `values.yaml` + dependency on `service-lib` |
+| `platform` | umbrella chart: all services, Traefik ingress with TLS 1.3, security headers, schema registration; `values-dev.yaml`, `values-prod.yaml` |
+| `infra` | infrastructure for the local cluster |
+
+Every API Deployment: rolling update with `maxUnavailable: 0, maxSurge: 1`, HPA 2–4 replicas on
+70% CPU (1–4 in dev), PDB `minAvailable: 1`, readiness `/health/ready`, liveness `/health/live`,
+`preStop` sleep 5 s plus graceful shutdown in uvicorn, non-root user, read-only root filesystem,
+all capabilities dropped. Workers (outbox relay + consumers) are separate Deployments of the same
+image; migrations run as a Helm `pre-install,pre-upgrade` Job (`alembic upgrade head`).
+
+The ingress `https://api.orders.localhost` accepts TLS 1.3 only (a TLS 1.2 client is rejected),
+the certificate is issued by a self-signed CA from cert-manager, responses carry
+`Strict-Transport-Security`, `X-Content-Type-Options` and no `Server` header.
+`make k3d-zero-downtime` result on a laptop: 8970 requests at 50 RPS, 0 errors, 0 responses 5xx.
 
 ---
 

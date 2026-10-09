@@ -1,0 +1,39 @@
+# Значения по умолчанию (prod-подобные); окружения переопределяют их в platform/values-*.yaml
+global:
+  image: { registry: k3d-registry.localhost:5050, tag: latest }
+  secretName: platform-secrets
+  environment: k8s
+  logLevel: INFO
+  kafkaBootstrap: kafka:9092
+  schemaRegistryUrl: http://schema-registry:8081
+  otlpEndpoint: ""
+
+image:
+  tag: ""  # пусто — global.image.tag
+port: 8005
+grpcPort: null
+replicas: 2
+hpa: { enabled: true, minReplicas: 2, maxReplicas: 4, cpuUtilization: 70 }
+pdb: { minAvailable: 1 }
+resources:
+  requests: { cpu: 100m, memory: 160Mi }
+  limits: { cpu: '1', memory: 384Mi }
+migrations: { enabled: true }
+worker:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 320Mi }
+serviceMonitor: { enabled: true }
+# Секреты — только имена ключей Secret (создаёт make inject-secrets)
+secretEnv:
+  - ORDERS_DB_PASSWORD
+  - REDIS_PASSWORD
+env:
+  DATABASE_URL: "postgresql+asyncpg://orders:$(ORDERS_DB_PASSWORD)@postgres:5432/orders"
+  AUTH_JWKS_URL: "http://auth-service:8001/api/v1/auth/.well-known/jwks.json"
+  PRODUCT_GRPC_TARGET: "product-service:50051"
+  INVENTORY_GRPC_TARGET: "inventory-service:50052"
+volumes: []
+volumeMounts: []

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: infra
+description: Infrastructure for the local Kubernetes stack (PostgreSQL, MongoDB, Redis, Kafka, Schema Registry, Mailpit)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
