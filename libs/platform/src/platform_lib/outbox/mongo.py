@@ -1,6 +1,7 @@
 """Transactional outbox на MongoDB (нужен replica set для транзакций)."""
 
 import asyncio
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,6 +12,7 @@ from pymongo.errors import DuplicateKeyError
 
 from events import BaseEvent
 from platform_lib.logging import get_logger
+from platform_lib.metrics import OUTBOX_OLDEST_AGE, OUTBOX_PENDING, OUTBOX_PUBLISHED
 from platform_lib.outbox.publisher import EventPublisher
 from platform_lib.outbox.records import OutboxRecord, record_from_event
 
@@ -132,10 +134,29 @@ class MongoOutboxRelay:
                 )
         return len(published)
 
+    async def report_metrics(self) -> None:
+        pending = await self._outbox.count_documents({"published_at": None})
+        oldest = await self._outbox.find_one(
+            {"published_at": None}, sort=[("created_at", ASCENDING)], projection={"created_at": 1}
+        )
+        OUTBOX_PENDING.set(pending)
+        age = 0.0
+        if oldest:
+            created = oldest["created_at"]
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age = (datetime.now(UTC) - created).total_seconds()
+        OUTBOX_OLDEST_AGE.set(age)
+
     async def run_forever(self, stop: asyncio.Event) -> None:
+        reported_at = 0.0
         while not stop.is_set():
             try:
                 published = await self.run_once()
+                OUTBOX_PUBLISHED.inc(published)
+                if time.monotonic() - reported_at > 5.0:
+                    await self.report_metrics()
+                    reported_at = time.monotonic()
             except Exception:
                 log.exception("outbox_relay_iteration_failed")
                 published = 0

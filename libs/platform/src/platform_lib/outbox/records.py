@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from events import BaseEvent
+from platform_lib.telemetry import trace_headers
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,7 @@ def record_from_event(event: BaseEvent, headers: Mapping[str, str] | None = None
         headers={
             "event_type": event.event_type,
             "correlation_id": str(event.correlation_id),
+            **trace_headers(),  # трейс продолжится в consumer’е другого сервиса
             **(headers or {}),
         },
     )

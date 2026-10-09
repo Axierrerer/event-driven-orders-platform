@@ -1,0 +1,62 @@
+# promtool test rules: make check-alerts
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'outbox_oldest_age_seconds{service="order-worker"}'
+        values: "0 30 90 150 210"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxStuck
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: OutboxStuck
+        exp_alerts:
+          - exp_labels: { severity: critical, service: order-worker }
+            exp_annotations:
+              summary: "order-worker: outbox records wait for Kafka longer than 60 s"
+
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{service="order-service",status="200"}'
+        values: "0+100x10"
+      - series: 'http_requests_total{service="order-service",status="500"}'
+        values: "0+10x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, service: order-service }
+            exp_annotations:
+              summary: "order-service: more than 2% of requests fail with 5xx"
+
+  - interval: 1m
+    input_series:
+      - series: 'dlq_messages_total{service="inventory-worker",topic="order.created"}'
+        values: "0 0 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DLQNotEmpty
+        exp_alerts:
+          - exp_labels: { severity: warning, service: inventory-worker, topic: order.created }
+            exp_annotations:
+              summary: "inventory-worker: messages from order.created went to the DLQ"
+
+  - interval: 1m
+    input_series:
+      - series: 'orders_stuck_new{service="order-worker"}'
+        values: "0 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SagaStuck
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SagaStuck
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "Orders stay in NEW for more than 2 minutes: inventory does not answer"

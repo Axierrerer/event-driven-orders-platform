@@ -464,3 +464,13 @@ async def test_listing_scoped_by_role(world: World) -> None:
     ).json()
     assert [o["user_id"] for o in reserved_only] == [str(bob)]
     assert (await world.client.get("/api/v1/orders")).status_code == 401
+
+
+async def test_stuck_new_orders_are_reported(world: World) -> None:
+    from src.services.metrics import ORDERS_STUCK_NEW
+
+    await placed(world)
+    assert await world.service.report_stuck_orders() == 0
+    world.clock.advance(minutes=3)
+    assert await world.service.report_stuck_orders() == 1
+    assert ORDERS_STUCK_NEW._value.get() == 1

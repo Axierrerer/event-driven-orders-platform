@@ -9,7 +9,9 @@ from platform_lib.auth import JwksKeyProvider, JwtVerifier
 from platform_lib.checks import mongo_check, redis_check
 from platform_lib.health import HealthRegistry, health_router
 from platform_lib.logging import configure_logging
+from platform_lib.observability import setup_observability
 from platform_lib.ratelimit import BucketConfig, TokenBucket
+from platform_lib.telemetry import configure_tracing
 from src import db
 from src.api.routes import router
 from src.config import Settings, get_settings
@@ -51,6 +53,8 @@ async def prepare_database(database: Any) -> None:
 def create_app(settings: Settings | None = None, *, verifier: JwtVerifier | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.service_name, settings.log_level)
+    # До создания клиентов: инструментация оборачивает только новые httpx/gRPC-клиенты
+    configure_tracing(settings.service_name, settings.otel_exporter_otlp_endpoint)
 
     client = db.make_client(settings.mongo_url)
     database = client[settings.mongo_db]
@@ -68,6 +72,7 @@ def create_app(settings: Settings | None = None, *, verifier: JwtVerifier | None
     app.state.database = database
     app.state.admin = AdminService(database)
 
+    setup_observability(app, settings)
     health = HealthRegistry()
     health.register("mongo", mongo_check(client))
     health.register("redis", redis_check(redis))

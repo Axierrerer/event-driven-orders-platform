@@ -188,6 +188,16 @@ class OrderRepository:
         )
         return str(ref) if ref else None
 
+    async def count_in_status_before(self, status: OrderStatus, moment: datetime) -> int:
+        return int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(orders)
+                .where(orders.c.status == str(status), orders.c.created_at < moment)
+            )
+            or 0
+        )
+
     async def count(self) -> int:
         return int(await self._session.scalar(select(func.count()).select_from(orders)) or 0)
 

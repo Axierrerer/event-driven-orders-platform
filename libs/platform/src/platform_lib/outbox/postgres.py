@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import time
 import zlib
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -32,10 +33,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from events import BaseEvent
 from platform_lib.logging import get_logger
+from platform_lib.metrics import OUTBOX_OLDEST_AGE, OUTBOX_PENDING, OUTBOX_PUBLISHED
 from platform_lib.outbox.publisher import EventPublisher
 from platform_lib.outbox.records import OutboxRecord, record_from_event
 
 log = get_logger(__name__)
+
+METRICS_INTERVAL_SECONDS = 5.0
 
 
 def outbox_table(metadata: MetaData) -> Table:
@@ -178,10 +182,26 @@ class PgOutboxRelay:
             )
         return int(count or 0)
 
+    async def report_metrics(self) -> None:
+        t = self._table
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(func.count(), func.min(t.c.created_at)).where(t.c.published_at.is_(None))
+                )
+            ).one()
+        OUTBOX_PENDING.set(row[0])
+        OUTBOX_OLDEST_AGE.set((datetime.now(UTC) - row[1]).total_seconds() if row[1] else 0)
+
     async def run_forever(self, stop: asyncio.Event) -> None:
+        reported_at = 0.0
         while not stop.is_set():
             try:
                 published = await self.run_once()
+                OUTBOX_PUBLISHED.inc(published)
+                if time.monotonic() - reported_at > METRICS_INTERVAL_SECONDS:
+                    await self.report_metrics()
+                    reported_at = time.monotonic()
             except Exception:
                 log.exception("outbox_relay_iteration_failed")
                 published = 0

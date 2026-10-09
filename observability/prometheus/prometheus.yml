@@ -1,0 +1,50 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# DNS-обнаружение: все реплики сервиса (например, api-gateway × N) попадают в цели
+scrape_configs:
+  - job_name: api
+    dns_sd_configs:
+      - names: [api-gateway]
+        type: A
+        port: 8000
+      - names: [auth-service]
+        type: A
+        port: 8001
+      - names: [user-service]
+        type: A
+        port: 8002
+      - names: [product-service]
+        type: A
+        port: 8003
+      - names: [inventory-service]
+        type: A
+        port: 8004
+      - names: [order-service]
+        type: A
+        port: 8005
+      - names: [notification-service]
+        type: A
+        port: 8006
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+
+  - job_name: worker
+    dns_sd_configs:
+      - names:
+          - auth-worker
+          - user-worker
+          - product-worker
+          - inventory-worker
+          - order-worker
+          - notification-worker
+        type: A
+        port: 9100
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service

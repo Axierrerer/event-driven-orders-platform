@@ -24,7 +24,8 @@
 | `order-service` с сагой заказа | ✅ готово |
 | `notification-service` (письма, rate limiting) | ✅ готово |
 | `api-gateway` (маршрутизация, JWT, rate limiting, единый Swagger) за Nginx | ✅ готово |
-| Kubernetes (k3d + Helm), observability, проверки безопасности, e2e | ⏳ в планах |
+| Observability: трейсы (OpenTelemetry → Jaeger), метрики (Prometheus), логи (Loki), дашборды Grafana, алерты | ✅ готово |
+| Kubernetes (k3d + Helm), проверки безопасности, e2e | ⏳ в планах |
 
 ---
 
@@ -129,6 +130,7 @@ stateDiagram-v2
 | Зависимости | uv (workspace, единый `uv.lock`) |
 | Качество | ruff (линтер и форматирование), mypy (strict), import-linter, pytest + pytest-asyncio, pytest-cov, testcontainers |
 | Инфраструктура | Docker, docker-compose, Nginx; Kubernetes (k3d) и Helm — в планах |
+| Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Loki, Grafana Alloy |
 | Почта (локально) | Mailpit |
 
 ---
@@ -142,6 +144,7 @@ stateDiagram-v2
 ├── Makefile                    # все рабочие команды (make help)
 ├── docker-compose.yml          # локальный стенд
 ├── nginx/nginx.conf            # публичная точка входа: reverse proxy + балансировщик
+├── observability/             # Collector, Prometheus (+ алерты), Loki/Alloy, Grafana
 ├── proto/                      # .proto внутренних gRPC API
 ├── scripts/                    # все скрипты проекта
 │   ├── doctor.sh               #   проверка окружения разработчика
@@ -357,6 +360,34 @@ docker compose logs -f product-worker    # логи одного контейн�
 curl localhost:8001/health/ready         # 503, если какая-то зависимость недоступна
 ```
 
+### Observability
+
+```bash
+make obs-up      # стенд + OpenTelemetry Collector, Jaeger, Prometheus, Loki, Alloy, Grafana
+make obs-down
+```
+
+| Инструмент | Адрес | Что там |
+|-----------|-------|---------|
+| Grafana | http://localhost:3000 | дашборды в папке *Orders Platform*: запросы (RED), сага заказа, Kafka и outbox; логи (Loki) и трейсы (Jaeger) в Explore |
+| Jaeger | http://localhost:16686 | один трейс на запрос через все сервисы: gateway → order-service → Kafka → inventory → order → notification, включая gRPC |
+| Prometheus | http://localhost:9090 | метрики всех реплик API и worker'ов; состояние алертов на `/alerts` |
+
+- **Трейсы.** Каждый сервис отправляет спаны по OTLP. Контекст трейса едет вместе с событием:
+  outbox кладёт `traceparent` в заголовки Kafka, consumer продолжает тот же трейс.
+- **Логи.** В JSON-логах есть `trace_id` / `span_id`; Alloy отправляет логи контейнеров в Loki.
+  В Grafana из строки лога можно перейти к трейсу, а из спана — к его логам.
+- **Метрики.** HTTP (запросы, ошибки, задержка по маршрутам), Kafka (отставание consumer'ов,
+  обработанные события, DLQ), outbox (неотправленные записи, возраст самой старой) и
+  бизнес-метрики (созданные заказы, переходы статусов, время решения саги, зависшие заказы,
+  резервы, письма).
+- **Алерты.** `HighErrorRate`, `HighLatency`, `OutboxStuck`, `ConsumerLag`, `DLQNotEmpty`,
+  `SagaStuck` — правила в `observability/prometheus/alerts.yml`, unit-тесты запускаются
+  `make check-alerts`. Попробуйте: `docker compose stop kafka`, зарегистрируйте пользователя —
+  примерно через две минуты сработает `OutboxStuck`.
+
+Без `make obs-up` сервисы всё равно пишут `trace_id` в логи, но трейсы не экспортируют.
+
 ### Kafka и базы данных
 
 ```bash
@@ -388,6 +419,8 @@ make export-schemas    # перегенерировать JSON Schema событ
 make proto             # перегенерировать gRPC-код после изменения proto/
 make register-schemas  # зарегистрировать схемы в Schema Registry (делает make dev-up)
 make compat-schemas    # проверить совместимость моделей со схемами в реестре
+make obs-up           # стенд с Jaeger, Prometheus, Grafana, Loki
+make check-alerts     # проверить правила алертов Prometheus и их unit-тесты
 ```
 
 Работа с одним сервисом:

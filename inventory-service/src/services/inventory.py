@@ -37,6 +37,7 @@ from src.domain.models import (
     merge_quantities,
 )
 from src.repositories.stock import Reservation, StockRepository
+from src.services.metrics import RESERVATIONS, RESERVATIONS_RELEASED
 
 log = get_logger(__name__)
 
@@ -100,6 +101,7 @@ class InventoryService:
                     ),
                 ),
             )
+            RESERVATIONS.labels(str(reason).lower()).inc()
             log.info("reservation_failed", order_id=str(order.order_id), reason=str(reason))
             return
 
@@ -127,6 +129,7 @@ class InventoryService:
                 ),
             ),
         )
+        RESERVATIONS.labels("reserved").inc()
         log.info("reservation_created", order_id=str(order.order_id))
 
     async def on_order_status_changed(
@@ -186,6 +189,7 @@ class InventoryService:
                 ),
             ),
         )
+        RESERVATIONS_RELEASED.labels(str(reason).lower()).inc()
         log.info("reservation_released", order_id=str(reservation.order_id), reason=str(reason))
 
     # ---------- истечение резервов ----------

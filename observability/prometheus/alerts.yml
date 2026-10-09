@@ -1,0 +1,53 @@
+groups:
+  - name: orders-platform
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum by (service) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (service) (rate(http_requests_total[5m])) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }}: more than 2% of requests fail with 5xx"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (service, le) (rate(http_request_duration_seconds_bucket[10m]))) > 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }}: p95 latency above 150 ms"
+
+      - alert: OutboxStuck
+        expr: max by (service) (outbox_oldest_age_seconds) > 60
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }}: outbox records wait for Kafka longer than 60 s"
+
+      - alert: ConsumerLag
+        expr: max by (service, topic) (kafka_consumer_lag) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} lags behind {{ $labels.topic }} by more than 1000 events"
+
+      - alert: DLQNotEmpty
+        expr: sum by (service, topic) (increase(dlq_messages_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }}: messages from {{ $labels.topic }} went to the DLQ"
+
+      - alert: SagaStuck
+        expr: max(orders_stuck_new) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Orders stay in NEW for more than 2 minutes: inventory does not answer"

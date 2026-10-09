@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -76,3 +76,19 @@ compat-schemas: ## Проверить совместимость моделей 
 
 proto: ## Сгенерировать Python-код gRPC из proto/ в libs/proto
 	./scripts/generate-proto.sh
+
+obs-up: ## Стенд + observability: Jaeger, Prometheus, Grafana, Loki (нужно ~2 GB RAM сверху)
+	OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 $(COMPOSE) --profile observability up -d --build --wait
+	@echo ""
+	@echo "  Grafana:    http://localhost:3000 (дашборды в папке Orders Platform)"
+	@echo "  Jaeger:     http://localhost:16686"
+	@echo "  Prometheus: http://localhost:9090 (алерты: /alerts)"
+
+obs-down: ## Остановить стенд вместе с observability
+	$(COMPOSE) --profile observability down
+
+check-alerts: ## Проверить правила алертов Prometheus и их unit-тесты (promtool)
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/rules:ro" -w /rules \
+		--entrypoint promtool prom/prometheus:v3.2.1 check rules alerts.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/rules:ro" -w /rules \
+		--entrypoint promtool prom/prometheus:v3.2.1 test rules alerts_test.yml

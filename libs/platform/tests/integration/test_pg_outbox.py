@@ -220,3 +220,21 @@ async def test_consumer_failure_rolls_back_mark_and_changes(
     assert await count(session_factory, schema.accounts) == 0
     assert not await inbox.is_processed(event.event_id, "inventory-service")
     assert len(dlq.sent) == 1
+
+
+async def test_relay_reports_outbox_metrics(
+    pg: tuple[AsyncEngine, PgSchema], session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from platform_lib.metrics import OUTBOX_OLDEST_AGE, OUTBOX_PENDING
+
+    _, schema = pg
+    await add_events(session_factory, schema, [make_event(), make_event()])
+    relay = PgOutboxRelay(session_factory, schema.outbox, FakePublisher(fail_ids=set()))
+    await relay.report_metrics()
+    assert OUTBOX_PENDING._value.get() == 2
+    assert OUTBOX_OLDEST_AGE._value.get() >= 0
+
+    await relay.run_once()
+    await relay.report_metrics()
+    assert OUTBOX_PENDING._value.get() == 0
+    assert OUTBOX_OLDEST_AGE._value.get() == 0

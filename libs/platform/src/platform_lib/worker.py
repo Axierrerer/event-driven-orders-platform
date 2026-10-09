@@ -22,8 +22,10 @@ from platform_lib.consumer import (
 from platform_lib.heartbeat import heartbeat
 from platform_lib.kafka import make_consumer, make_producer
 from platform_lib.logging import get_logger
+from platform_lib.metrics import start_metrics_server
 from platform_lib.outbox import KafkaEventPublisher, MongoOutboxRelay, PgOutboxRelay
 from platform_lib.settings import KafkaSettings, ServiceSettings
+from platform_lib.telemetry import configure_tracing
 
 log = get_logger(__name__)
 
@@ -41,6 +43,8 @@ async def _run(
 ) -> None:
     if not isinstance(settings, KafkaSettings):
         raise TypeError("settings must include KafkaSettings")
+    configure_tracing(settings.service_name, settings.otel_exporter_otlp_endpoint)
+    start_metrics_server(settings.worker_metrics_port)
     client_id = f"{settings.service_name}-{socket.gethostname()}"
     registry = SchemaRegistryClient({"url": settings.schema_registry_url})
     producer = make_producer(settings.kafka_bootstrap, client_id)

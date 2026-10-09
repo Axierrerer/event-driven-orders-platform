@@ -8,6 +8,8 @@ from typing import Any
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
+from platform_lib.telemetry import current_trace_ids
+
 SENSITIVE_KEY_PARTS = ("password", "token", "authorization", "secret", "cookie")
 REDACTED = "***"
 
@@ -37,6 +39,15 @@ def redact_sensitive(_logger: WrappedLogger, _method: str, event_dict: EventDict
     return event_dict
 
 
+def add_trace_ids(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
+    """trace_id/span_id текущего спана: по ним лог связывается с трейсом в Jaeger."""
+    ids = current_trace_ids()
+    if ids is not None:
+        event_dict.setdefault("trace_id", ids[0])
+        event_dict.setdefault("span_id", ids[1])
+    return event_dict
+
+
 def _add_service(service_name: str) -> Processor:
     def processor(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
         event_dict.setdefault("service", service_name)
@@ -53,6 +64,7 @@ def configure_logging(service_name: str, level: str = "INFO") -> None:
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         _add_service(service_name),
+        add_trace_ids,
         redact_sensitive,
     ]
     structlog.configure(

@@ -31,6 +31,7 @@ from src.repositories.contacts import ContactRepository
 from src.repositories.journal import JournalRepository
 from src.repositories.templates import TemplateRepository
 from src.services.email import EmailSender, OutgoingEmail
+from src.services.metrics import NOTIFICATIONS
 
 log = get_logger(__name__)
 
@@ -176,6 +177,7 @@ class NotificationService:
                 NotificationStatus.THROTTLED,
                 now + timedelta(seconds=max(decision.retry_after_seconds, 1)),
             )
+            NOTIFICATIONS.labels(notification.template, "throttled").inc()
             log.info("notification_throttled", notification_id=notification.id)
             return
 
@@ -203,6 +205,7 @@ class NotificationService:
             error = f"{type(exc).__name__}: {exc}"
             if attempts >= self._max_attempts:
                 await self._journal.mark_failed(notification.id, error, attempts)
+                NOTIFICATIONS.labels(notification.template, "failed").inc()
                 log.error("notification_failed", notification_id=notification.id, attempts=attempts)
             else:
                 await self._journal.postpone(
@@ -212,12 +215,14 @@ class NotificationService:
                     error=error,
                     attempts=attempts,
                 )
+                NOTIFICATIONS.labels(notification.template, "retry").inc()
                 log.warning(
                     "notification_retry", notification_id=notification.id, attempts=attempts
                 )
             return
 
         await self._journal.mark_sent(notification.id, now)
+        NOTIFICATIONS.labels(notification.template, "sent").inc()
         log.info(
             "notification_sent", notification_id=notification.id, template=notification.template
         )

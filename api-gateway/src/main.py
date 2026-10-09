@@ -10,7 +10,9 @@ from platform_lib.auth import JwksKeyProvider, JwtVerifier
 from platform_lib.checks import redis_check
 from platform_lib.health import HealthRegistry, health_router
 from platform_lib.logging import configure_logging
+from platform_lib.observability import setup_observability
 from platform_lib.ratelimit import BucketConfig, TokenBucket
+from platform_lib.telemetry import configure_tracing
 from src.api.routes import request_context, router
 from src.config import Settings, get_settings
 from src.services.gateway import Gateway, RateLimits
@@ -24,6 +26,8 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.service_name, settings.log_level)
+    # До создания клиентов: инструментация оборачивает только новые httpx/gRPC-клиенты
+    configure_tracing(settings.service_name, settings.otel_exporter_otlp_endpoint)
 
     redis = Redis.from_url(settings.redis_url)
     http = httpx.AsyncClient(
@@ -68,6 +72,7 @@ def create_app(
         openapi_cache_seconds=settings.openapi_cache_seconds,
     )
 
+    setup_observability(app, settings)
     health = HealthRegistry()
     health.register("redis", redis_check(redis))
     app.include_router(health_router(health))

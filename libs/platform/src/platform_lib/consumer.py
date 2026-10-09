@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -20,12 +21,15 @@ from uuid import UUID
 from confluent_kafka import Consumer, Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.serialization import MessageField, SerializationContext
+from opentelemetry.trace import SpanKind
 from sqlalchemy import Table, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from events import EVENTS_BY_TOPIC, BaseEvent, dlq_topic, make_deserializer
 from platform_lib.logging import get_logger
+from platform_lib.metrics import CONSUMER_LAG, DLQ_MESSAGES, EVENTS_PROCESSED
+from platform_lib.telemetry import context_from_headers, tracer
 
 log = get_logger(__name__)
 
@@ -99,19 +103,34 @@ class IdempotentConsumer:
         return list(self._handlers)
 
     async def process(self, message: KafkaMessage) -> None:
-        """Обработать сообщение. После возврата offset можно коммитить."""
+        """Обработать сообщение. После возврата offset можно коммитить.
+
+        Span обработки — дочерний к span’у бизнес-операции producer’а (traceparent
+        из заголовков сообщения), поэтому весь путь заказа виден одним трейсом.
+        """
         topic = message.topic() or ""
+        with tracer().start_as_current_span(
+            f"consume {topic}",
+            context=context_from_headers(message.headers()),
+            kind=SpanKind.CONSUMER,
+            attributes={"messaging.system": "kafka", "messaging.destination.name": topic},
+        ) as span:
+            result = await self._process(message, topic)
+            span.set_attribute("orders.consumer.result", result)
+            EVENTS_PROCESSED.labels(topic, result).inc()
+
+    async def _process(self, message: KafkaMessage, topic: str) -> str:
         handler = self._handlers.get(topic)
         if handler is None:
             await self._dead_letters.send(message, f"нет обработчика для топика {topic}")
-            return
+            return "no_handler"
 
         try:
             event = self._decode(message)
         except Exception as exc:
             log.warning("event_decode_failed", topic=topic, error=str(exc))
             await self._dead_letters.send(message, f"decode: {type(exc).__name__}: {exc}")
-            return
+            return "decode_error"
 
         context = {"topic": topic, "event_id": str(event.event_id), "group": self.group_id}
         last_error: Exception | None = None
@@ -122,16 +141,17 @@ class IdempotentConsumer:
                 async with self._inbox.transaction() as tx:
                     if not await self._inbox.mark_processed(tx, event.event_id, self.group_id):
                         log.info("event_duplicate_skipped", **context)
-                        return
+                        return "duplicate"
                     await handler(event, tx)
                 log.info("event_processed", **context)
-                return
+                return "processed"
             except Exception as exc:
                 last_error = exc
                 log.warning("event_handler_failed", error=repr(exc), **context)
 
         await self._dead_letters.send(message, f"handler: {last_error!r}")
         log.error("event_sent_to_dlq", **context)
+        return "dead_letter"
 
 
 # ---------------- хранилища processed_events ----------------
@@ -244,6 +264,7 @@ class KafkaDeadLetterSink:
         remaining = self._producer.flush(self._flush_timeout)
         if remaining:
             raise RuntimeError(f"DLQ-сообщение для {topic} не доставлено")
+        DLQ_MESSAGES.labels(topic).inc()
 
 
 class KafkaConsumerRunner:
@@ -255,16 +276,33 @@ class KafkaConsumerRunner:
         kafka_consumer: Consumer,
         *,
         poll_timeout_seconds: float = 1.0,
+        lag_interval_seconds: float = 15.0,
     ) -> None:
         self._consumer = consumer
         self._kafka = kafka_consumer
         self._poll_timeout = poll_timeout_seconds
+        self._lag_interval = lag_interval_seconds
+        self._lag_reported_at = 0.0
+
+    async def _report_lag(self) -> None:
+        now = time.monotonic()
+        if now - self._lag_reported_at < self._lag_interval:
+            return
+        self._lag_reported_at = now
+        try:
+            lags = await asyncio.to_thread(_partition_lag, self._kafka)
+        except Exception as exc:
+            log.warning("consumer_lag_unavailable", error=str(exc))
+            return
+        for topic, partition, lag in lags:
+            CONSUMER_LAG.labels(topic, str(partition)).set(lag)
 
     async def run(self, stop: asyncio.Event) -> None:
         self._kafka.subscribe(self._consumer.topics)
         log.info("consumer_started", group=self._consumer.group_id, topics=self._consumer.topics)
         try:
             while not stop.is_set():
+                await self._report_lag()
                 message = await asyncio.to_thread(self._kafka.poll, self._poll_timeout)
                 if message is None:
                     continue
@@ -276,6 +314,17 @@ class KafkaConsumerRunner:
         finally:
             await asyncio.to_thread(self._kafka.close)
             log.info("consumer_stopped", group=self._consumer.group_id)
+
+
+def _partition_lag(kafka: Consumer) -> list[tuple[str, int, int]]:
+    """(topic, partition, lag) для назначенных consumer’у партиций."""
+    result = []
+    for tp in kafka.assignment():
+        low, high = kafka.get_watermark_offsets(tp, timeout=1.0, cached=False)
+        [position] = kafka.position([tp])
+        offset = position.offset if position.offset >= 0 else low
+        result.append((tp.topic, tp.partition, max(high - offset, 0)))
+    return result
 
 
 __all__ = [
