@@ -366,6 +366,7 @@ services:
       # Лимиты переопределяются для нагрузочного теста (make load)
       ANONYMOUS_RATE_CAPACITY: ${GATEWAY_ANONYMOUS_RATE_CAPACITY:-40}
       USER_RATE_CAPACITY: ${GATEWAY_USER_RATE_CAPACITY:-200}
+      LOGIN_RATE_CAPACITY: ${GATEWAY_LOGIN_RATE_CAPACITY:-10}
 
   # ---------------- observability (профиль: make obs-up) ----------------
   otel-collector:
