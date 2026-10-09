@@ -1695,21 +1695,28 @@ name = "user-service"
 version = "0.1.0"
 source = { virtual = "user-service" }
 dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
     { name = "events" },
     { name = "fastapi" },
     { name = "platform-lib" },
-    { name = "pydantic" },
+    { name = "pydantic", extra = ["email"] },
     { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.14" },
+    { name = "asyncpg", specifier = ">=0.30" },
     { name = "events", editable = "libs/events" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "platform-lib", editable = "libs/platform" },
     { name = "pydantic", specifier = ">=2.9,<3" },
+    { name = "pydantic", extras = ["email"], specifier = ">=2.9,<3" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
