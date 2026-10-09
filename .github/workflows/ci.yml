@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      packages: ${{ steps.matrix.outputs.packages }}
+      services: ${{ steps.matrix.outputs.services }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          # Изменение libs/ и общих файлов затрагивает все пакеты
+          filters: |
+            shared: &shared
+              - libs/**
+              - pyproject.toml
+              - uv.lock
+              - .github/workflows/ci.yml
+            libs/events: *shared
+            libs/platform: *shared
+            auth-service: [*shared, auth-service/**]
+            user-service: [*shared, user-service/**]
+            product-service: [*shared, product-service/**]
+            inventory-service: [*shared, inventory-service/**]
+            order-service: [*shared, order-service/**]
+            notification-service: [*shared, notification-service/**]
+            api-gateway: [*shared, api-gateway/**]
+      - name: Build matrices
+        id: matrix
+        env:
+          CHANGES: ${{ steps.filter.outputs.changes }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          packages=$(jq -c '[.[] | select(. != "shared")]' <<< "$CHANGES")
+          if [ "$EVENT" = "push" ]; then
+            # main: собираются и публикуются все образы (их разворачивает CD)
+            services='["auth-service","user-service","product-service","inventory-service","order-service","notification-service","api-gateway"]'
+          else
+            services=$(jq -c '[.[] | select(endswith("-service") or . == "api-gateway")]' <<< "$packages")
+          fi
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "packages: $packages"; echo "services: $services"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --all-packages --locked
+      - name: ruff, format, schemas, proto, import-linter
+        run: make lint
+      - name: mypy
+        run: make typecheck
+      - run: ./scripts/ci-install-tools.sh helm kubeconform
+      - name: helm lint + kubeconform
+        run: make helm-check
+
+  tests:
+    name: Tests (${{ matrix.package }})
+    needs: changes
+    if: needs.changes.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.changes.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --all-packages --locked
+      - name: Kafka and Schema Registry for contract tests
+        if: matrix.package == 'libs/events'
+        run: docker compose up -d --wait kafka schema-registry
+      - name: Unit and integration tests (testcontainers), coverage >= 80%
+        working-directory: ${{ matrix.package }}
+        run: uv run pytest -q --cov=src --cov-report=term-missing --cov-fail-under=80
+
+  contracts:
+    name: Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --all-packages --locked
+      - run: docker compose up -d --wait kafka schema-registry
+      - name: Schemas of the base revision → registry, current models must stay compatible
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^1' }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+          # Модели событий базовой ревизии регистрируются её же кодом
+          (cd "$RUNNER_TEMP/base" && uv run --all-packages --locked python -m events.schemas_cli register --url http://localhost:8081)
+          make compat-schemas SCHEMA_REGISTRY_URL=http://localhost:8081
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: ./scripts/ci-install-tools.sh trivy gitleaks
+      - name: pip-audit (runtime dependencies)
+        run: |
+          uv export --all-packages --no-dev --no-hashes --no-emit-workspace \
+            --format requirements-txt --locked > "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --disable-pip --no-deps --strict
+      - name: trivy fs (vulnerabilities, secrets, misconfigurations)
+        run: trivy fs --quiet --scanners vuln,secret,misconfig --severity CRITICAL --exit-code 1 .
+      - name: gitleaks (git history)
+        run: gitleaks git --no-banner --redact --config .gitleaks.toml .
+
+  build:
+    name: Image (${{ matrix.service }})
+    needs: [changes, lint, tests]
+    if: always() && needs.lint.result == 'success' && needs.tests.result != 'failure' && needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Image name
+        id: image
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/orders-platform-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          load: true
+          tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - run: ./scripts/ci-install-tools.sh trivy
+      - name: trivy image — an image with a CRITICAL vulnerability is not published
+        run: trivy image --quiet --severity CRITICAL --exit-code 1 "${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}"
+      - name: Push to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAG: ${{ steps.image.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "$IMAGE:$TAG" "$IMAGE:main"
+          docker push -q "$IMAGE:$TAG"
+          docker push -q "$IMAGE:main"
+
+  # Единственная обязательная проверка в branch protection: имена jobs матриц зависят от изменений
+  ci-passed:
+    name: CI passed
+    needs: [changes, lint, tests, contracts, security, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs succeeded or were skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          jq -e 'all(.[]; . == "success" or . == "skipped")' <<< "$RESULTS"

@@ -28,6 +28,7 @@
 | Тестовые данные, сквозные сценарии, нагрузочный тест | ✅ готово |
 | Безопасность: скан зависимостей, секретов и образов, матрица доступа, OWASP ZAP | ✅ готово |
 | Kubernetes (k3d + Helm), sealed-secrets, ingress с TLS 1.3 | ✅ готово |
+| CI/CD: GitHub Actions, GHCR, деплой в dev + e2e, prod после ручного подтверждения | ✅ готово |
 
 ---
 
@@ -41,6 +42,7 @@
 - [Kubernetes](#kubernetes)
 - [Разработка](#разработка)
 - [Правила кода](#правила-кода)
+- [CI/CD](#cicd)
 - [Работа с git](#работа-с-git)
 - [Решение проблем](#решение-проблем)
 
@@ -588,12 +590,42 @@ docker build -f product-service/Dockerfile -t orders/product-service:dev .
   поля добавляются со значением по умолчанию, существующие не удаляются и не переименовываются.
 - **Секреты** не попадают в код, тесты и логи; пароли и токены в логах маскируются автоматически.
 
+## CI/CD
+
+GitHub Actions без своих серверов: всё выполняется на runner'ах GitHub.
+
+**CI** (`.github/workflows/ci.yml`, на каждый pull request и push в `main`):
+
+| Job | Что проверяет |
+|-----|---------------|
+| Changes | `dorny/paths-filter`: какие пакеты изменены; изменение `libs/` или lock-файла затрагивает все |
+| Lint | `make lint` (ruff, формат, схемы событий, proto, import-linter), `make typecheck` (mypy), `make helm-check` |
+| Tests | по каждому изменённому пакету: unit + интеграционные тесты (testcontainers), покрытие ≥ 80% |
+| Contracts | схемы базовой ревизии регистрируются, текущие модели событий должны быть совместимы |
+| Security | pip-audit, `trivy fs` (уязвимости, секреты, ошибки конфигурации), gitleaks по истории git |
+| Image | сборка Docker (кэш `type=gha`), `trivy image` — образ с CRITICAL не публикуется; на `main` — push в GHCR с тегами `sha-<short>` и `main` |
+| CI passed | единственная обязательная проверка для защиты ветки |
+
+PR, меняющий только `order-service/`, запускает только его тесты и собирает только его образ.
+
+**CD** (`.github/workflows/cd.yml`, после зелёного CI на `main`):
+
+1. **Deploy dev + e2e**: одноразовый кластер k3d в runner'е, `scripts/k3d-up.sh` с образами из
+   GHCR (`sha-<short>`) в namespace `dev`, затем сквозные сценарии (`scripts/k8s-e2e.sh`).
+2. **Deploy prod**: GitHub Environment `prod` с обязательным ревьюером — job ждёт ручного
+   подтверждения, затем разворачивает те же образы с `values-prod.yaml` в namespace `prod`
+   и делает smoke-проверку.
+
+Dependabot раз в неделю обновляет Python-зависимости, GitHub Actions и базовые образы.
+
+---
+
 ## Работа с git
 
-- `main` защищена: изменения только через pull request.
+- `main` защищена: изменения только через pull request с зелёным `CI passed`.
 - Одна задача — одна ветка (`feat/...`, `fix/...`, `docs/...`, `chore/...`) и один PR.
 - Сообщения коммитов — на английском.
-- Перед PR: `make lint typecheck test` и интеграционные тесты изменённых пакетов.
+- Перед PR (CI проверяет то же самое): `make lint typecheck test` и интеграционные тесты изменённых пакетов.
 
 ---
 

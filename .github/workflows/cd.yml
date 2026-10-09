@@ -1,0 +1,96 @@
+name: CD
+
+# После зелёного CI на main: dev (эфемерный k3d в runner'е) → e2e → prod после ручного подтверждения.
+# Учебное упрощение: dev и prod — namespace'ы одноразовых кластеров, образы — из GHCR (sha-<short>).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: cd
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  deploy-dev:
+    name: Deploy dev + e2e
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+      - id: tag
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "tag=sha-${SHA::7}" >> "$GITHUB_OUTPUT"
+      - run: ./scripts/ci-install-tools.sh helm k3d kubeseal
+      - run: echo "127.0.0.1 api.orders.localhost" | sudo tee -a /etc/hosts
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: helm upgrade --install (namespace dev)
+        env:
+          NAMESPACE: dev
+          VALUES: deploy/helm/platform/values-dev.yaml
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          export PULL_REGISTRY="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          ./scripts/k3d-up.sh
+      - run: uv sync --all-packages --locked
+      - name: e2e against dev
+        env:
+          NAMESPACE: dev
+          VALUES: deploy/helm/platform/values-dev.yaml
+        run: ./scripts/k8s-e2e.sh
+      - name: Pods on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl get events -n dev --sort-by=.lastTimestamp | tail -40
+
+  deploy-prod:
+    name: Deploy prod
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    # Environment prod с required reviewers: job ждёт ручного подтверждения
+    environment: prod
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: ./scripts/ci-install-tools.sh helm k3d kubeseal
+      - run: echo "127.0.0.1 api.orders.localhost" | sudo tee -a /etc/hosts
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: helm upgrade --install (namespace prod)
+        env:
+          NAMESPACE: prod
+          VALUES: deploy/helm/platform/values-prod.yaml
+          IMAGE_TAG: ${{ needs.deploy-dev.outputs.tag }}
+        run: |
+          export PULL_REGISTRY="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          ./scripts/k3d-up.sh
+      - name: Smoke check
+        run: |
+          curl -fsSk https://api.orders.localhost/health/ready
+          curl -fsSk https://api.orders.localhost/api/v1/products >/dev/null
+          kubectl get hpa,pdb -n prod

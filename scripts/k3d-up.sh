@@ -33,7 +33,15 @@ kubectl apply -f "https://github.com/bitnami-labs/sealed-secrets/releases/downlo
 kubectl rollout status deploy/sealed-secrets-controller -n kube-system --timeout=300s
 
 step "Образы сервисов → $registry (тег $tag)"
-docker compose build $services schema-init >/dev/null
+# PULL_REGISTRY=ghcr.io/<owner> — взять готовые образы (CD), иначе собрать локально
+if [ -n "${PULL_REGISTRY:-}" ]; then
+    for service in $services; do
+        docker pull -q "$PULL_REGISTRY/orders-platform-$service:$tag" >/dev/null
+        docker tag "$PULL_REGISTRY/orders-platform-$service:$tag" "orders-platform-$service"
+    done
+else
+    docker compose build $services schema-init >/dev/null
+fi
 for service in $services; do
     docker tag "orders-platform-$service" "localhost:$registry_port/orders-platform-$service:$tag"
     docker push -q "localhost:$registry_port/orders-platform-$service:$tag" >/dev/null

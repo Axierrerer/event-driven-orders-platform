@@ -28,6 +28,7 @@ the others and publishes compensating events when something fails.
 | Seed data, end-to-end scenarios, load test | ✅ done |
 | Security: dependency/secret/image scans, access matrix, OWASP ZAP | ✅ done |
 | Kubernetes (k3d + Helm), sealed-secrets, TLS 1.3 ingress | ✅ done |
+| CI/CD: GitHub Actions, GHCR, deploy to dev + e2e, prod after manual approval | ✅ done |
 
 ---
 
@@ -41,6 +42,7 @@ the others and publishes compensating events when something fails.
 - [Kubernetes](#kubernetes)
 - [Development](#development)
 - [Code conventions](#code-conventions)
+- [CI/CD](#cicd)
 - [Git workflow](#git-workflow)
 - [Troubleshooting](#troubleshooting)
 
@@ -586,12 +588,43 @@ unprivileged user, the image has a `HEALTHCHECK`.
   get defaults, existing fields are not removed or renamed.
 - **Secrets** never go into code, tests or logs; logs mask passwords and tokens automatically.
 
+## CI/CD
+
+GitHub Actions, no servers of our own: everything runs on GitHub-hosted runners.
+
+**CI** (`.github/workflows/ci.yml`, on every pull request and push to `main`):
+
+| Job | What it checks |
+|-----|----------------|
+| Changes | `dorny/paths-filter`: which packages changed; a change in `libs/` or the lock file affects all |
+| Lint | `make lint` (ruff, format, event schemas, proto, import-linter), `make typecheck` (mypy), `make helm-check` |
+| Tests | per changed package: unit + integration tests (testcontainers), coverage ≥ 80% |
+| Contracts | schemas of the base revision are registered, current event models must stay compatible |
+| Security | pip-audit, `trivy fs` (vulnerabilities, secrets, misconfigurations), gitleaks over git history |
+| Image | Docker build (cache `type=gha`), `trivy image` — an image with a CRITICAL vulnerability is not published; on `main` push to GHCR as `sha-<short>` and `main` |
+| CI passed | single required status check for branch protection |
+
+A PR that changes only `order-service/` runs only its tests and builds only its image.
+
+**CD** (`.github/workflows/cd.yml`, after a green CI on `main`):
+
+1. **Deploy dev + e2e**: an ephemeral k3d cluster in the runner, `scripts/k3d-up.sh` with the
+   images from GHCR (`sha-<short>`) in the namespace `dev`, then the end-to-end scenarios
+   (`scripts/k8s-e2e.sh`).
+2. **Deploy prod**: GitHub Environment `prod` with a required reviewer — the job waits for a
+   manual approval, then deploys the same images with `values-prod.yaml` to the namespace `prod`
+   and runs a smoke check.
+
+Dependabot updates Python dependencies, GitHub Actions and the base images weekly.
+
+---
+
 ## Git workflow
 
-- `main` is protected: changes only through pull requests.
+- `main` is protected: changes only through pull requests with a green `CI passed`.
 - One feature — one branch (`feat/...`, `fix/...`, `docs/...`, `chore/...`) and one PR.
 - Commit messages are in English.
-- Before opening a PR: `make lint typecheck test` and the integration tests of the changed
+- Before opening a PR (CI runs the same): `make lint typecheck test` and the integration tests of the changed
   packages.
 
 ---
