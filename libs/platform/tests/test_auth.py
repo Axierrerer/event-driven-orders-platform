@@ -167,3 +167,29 @@ async def test_optional_principal() -> None:
         assert (await c.get("/catalog", headers=user)).json() == {"who": str(USER_ID)}
         bad = {"Authorization": "Bearer broken"}
         assert (await c.get("/catalog", headers=bad)).status_code == 401
+
+
+async def test_jwks_loaded_on_first_use_even_right_after_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """monotonic() в свежем контейнере мал: первый запрос всё равно должен загрузить ключи."""
+    import platform_lib.auth as auth_module
+
+    monkeypatch.setattr(auth_module.time, "monotonic", lambda: 3.0)
+    jwks = {"keys": [public_jwk("k1", KEY.public_key())]}
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _r: httpx.Response(200, json=jwks))
+    )
+    principal = await JwtVerifier(JwksKeyProvider("http://auth/jwks", client=client)).verify(
+        make_token()
+    )
+    assert principal.user_id == USER_ID
+
+
+async def test_jwks_outage_gives_invalid_token_not_crash() -> None:
+    def broken(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("auth-service is down")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(broken))
+    with pytest.raises(InvalidTokenError):
+        await JwtVerifier(JwksKeyProvider("http://auth/jwks", client=client)).verify(make_token())

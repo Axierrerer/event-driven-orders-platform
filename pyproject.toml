@@ -19,6 +19,7 @@ dev = [
     "grpcio-tools>=1.66",
     "asgi-lifespan>=2.1",
     "respx>=0.21",
+    "locust>=2.32",
 ]
 
 [tool.uv]
