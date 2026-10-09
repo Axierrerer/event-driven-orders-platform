@@ -15,7 +15,7 @@ WORKDIR /app/service
 COPY product-service/src ./src
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8003
 USER app
-EXPOSE 8003
+EXPOSE 8003 50051
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health/live', timeout=2)"
-CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port $PORT --proxy-headers"]
+CMD ["sh", "-c", "exec uvicorn src.main:create_app --factory --host 0.0.0.0 --port $PORT --proxy-headers"]

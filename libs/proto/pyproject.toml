@@ -1,0 +1,16 @@
+[project]
+name = "orders-proto"
+version = "0.1.0"
+description = "Сгенерированный код gRPC внутренних API (источник — proto/)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "grpcio>=1.66",
+    "protobuf>=5.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orders_proto"]

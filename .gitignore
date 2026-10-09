@@ -29,9 +29,6 @@ coverage.xml
 htmlcov/
 
 # Генерируемое
-*_pb2.py
-*_pb2.pyi
-*_pb2_grpc.py
 load/reports/
 
 # CI не хранится в репозитории

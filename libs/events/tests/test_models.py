@@ -107,8 +107,16 @@ def test_money_keeps_two_decimal_places_on_wire() -> None:
 
 @pytest.mark.parametrize(
     "bad_amount",
-    [0.3, -1, "0.001", "1e20", "abc"],
-    ids=["float", "negative", "three-decimals", "too-many-digits", "not-a-number"],
+    [0.3, -1, "0.001", "1e20", "abc", "12345678901.00", "10000000000"],
+    ids=[
+        "float",
+        "negative",
+        "three-decimals",
+        "too-many-digits",
+        "not-a-number",
+        "11-integer-digits",
+        "above-max",
+    ],
 )
 def test_invalid_money_rejected(bad_amount: object) -> None:
     with pytest.raises(ValidationError):
@@ -200,3 +208,8 @@ def test_events_lib_has_no_platform_or_service_imports() -> None:
     for path in src.rglob("*.py"):
         text = path.read_text()
         assert not any(name in text for name in forbidden), path
+
+
+def test_max_money_accepted() -> None:
+    payload = OrderCreatedPayload.model_validate(_order_payload(total_amount="9999999999.99"))
+    assert payload.total_amount == Decimal("9999999999.99")

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+// Внутренний API каталога для api-gateway и order-service.
+package orders.catalog.v1;
+
+service ProductService {
+  // Товар по id. NOT_FOUND, если товара нет или он удалён.
+  rpc GetProduct(GetProductRequest) returns (Product);
+  // Товары по списку id (не более 100). Неизвестные id пропускаются.
+  rpc GetProducts(GetProductsRequest) returns (GetProductsResponse);
+}
+
+message GetProductRequest {
+  string product_id = 1;
+}
+
+message GetProductsRequest {
+  repeated string product_ids = 1;
+}
+
+message GetProductsResponse {
+  repeated Product products = 1;
+}
+
+message Product {
+  string id = 1;
+  string sku = 2;
+  string name = 3;
+  string description = 4;
+  string category_id = 5;
+  // Десятичная строка с двумя знаками, например "10.10": деньги не передаются как float.
+  string price = 6;
+  string currency = 7;
+  bool is_published = 8;
+  int64 version = 9;
+}
