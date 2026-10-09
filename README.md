@@ -26,7 +26,8 @@ the others and publishes compensating events when something fails.
 | `api-gateway` (routing, JWT, rate limiting, unified Swagger) behind Nginx | ✅ done |
 | Observability: traces (OpenTelemetry → Jaeger), metrics (Prometheus), logs (Loki), Grafana dashboards, alerts | ✅ done |
 | Seed data, end-to-end scenarios, load test | ✅ done |
-| Kubernetes (k3d + Helm), security scans | ⏳ planned |
+| Security: dependency/secret/image scans, access matrix, OWASP ZAP | ✅ done |
+| Kubernetes (k3d + Helm) | ⏳ planned |
 
 ---
 
@@ -232,7 +233,8 @@ Nginx in front of them, and waits until everything is healthy. It takes about 30
 (longer on the first run while images are downloaded).
 
 No `.env` file is needed: every variable in `docker-compose.yml` has a local default. To
-override something, e.g. a port that is already taken, create `.env` in the repository root:
+override something, e.g. a port that is already taken, copy the template (`cp .env.example .env`;
+all variables are listed there) or create `.env` with just the values you need:
 
 ```dotenv
 GATEWAY_HOST_PORT=8080      # Nginx port on the host
@@ -412,6 +414,21 @@ End-to-end scenarios (`e2e/`) go through the public API only:
 7. idempotency: the same `Idempotency-Key` returns the same order, a redelivered Kafka event
    changes nothing;
 8. access rules: customers cannot ship, see other orders or order anonymously.
+
+### Security checks
+
+```bash
+make scan   # pip-audit (dependencies), gitleaks (git history), trivy (Dockerfiles and images)
+```
+
+- The scan fails on any CRITICAL vulnerability and on any HIGH one that has a fix; the
+  remaining HIGH findings of the base image (no fix in Debian yet) are justified in
+  `docs/security/exceptions.md`.
+- `make e2e` includes an access matrix: every protected endpoint is called without a token
+  (401), with an insufficient role (403) and on someone else's resource (404).
+- OWASP ZAP API scan against the gateway: `docs/security/zap-api-scan.md`.
+- Nginx sends `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Cross-Origin-Resource-Policy` and hides its version; errors never include stack traces.
 
 ### Kafka and databases
 

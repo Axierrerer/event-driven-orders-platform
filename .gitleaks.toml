@@ -1,0 +1,7 @@
+# Правила gitleaks по умолчанию + исключения для заведомо тестовых значений
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Тестовые значения заголовка Idempotency-Key"
+regexes = ['''key-12345678''']

@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load scan
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -99,10 +99,14 @@ seed: ## Тестовые данные стенда: админ, менедже�
 
 E2E_RESERVATION_TTL ?= 15
 
-e2e: ## Сквозные сценарии против стенда (на время прогона срок резерва сокращается)
-	RESERVATION_TTL_SECONDS=$(E2E_RESERVATION_TTL) $(COMPOSE) up -d --wait inventory-service inventory-worker
+# На время e2e: короткий срок резерва и высокие лимиты gateway (тесты часто входят в систему)
+E2E_ENV := RESERVATION_TTL_SECONDS=$(E2E_RESERVATION_TTL) GATEWAY_LOGIN_RATE_CAPACITY=100000 \
+	GATEWAY_ANONYMOUS_RATE_CAPACITY=100000 GATEWAY_USER_RATE_CAPACITY=100000
+
+e2e: ## Сквозные сценарии против стенда (срок резерва и лимиты меняются на время прогона)
+	$(E2E_ENV) $(COMPOSE) up -d --wait inventory-service inventory-worker api-gateway nginx
 	@status=0; (cd e2e && uv run pytest -q) || status=$$?; \
-		$(COMPOSE) up -d --wait inventory-service inventory-worker >/dev/null 2>&1; \
+		$(COMPOSE) up -d --wait inventory-service inventory-worker api-gateway nginx >/dev/null 2>&1; \
 		exit $$status
 
 LOAD_USERS ?= 100
@@ -117,3 +121,6 @@ load: ## Нагрузочный тест (locust, ~500 RPS) через Nginx; о
 		$(COMPOSE) up -d --wait api-gateway nginx >/dev/null 2>&1; \
 		uv run python scripts/perf_report.py load/reports/run_stats.csv docs/perf/report.md; \
 		exit $$status
+
+scan: ## Безопасность: pip-audit, gitleaks, trivy (конфиги и образы)
+	./scripts/scan.sh
