@@ -1,14 +1,24 @@
 """Сценарии полного жизненного цикла заказа через публичный API."""
 
+import inspect
+import subprocess
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
-from confluent_kafka import Consumer, Producer, TopicPartition
 
-from .conftest import Platform, User, compose, wait_for, wait_until
+from .conftest import (
+    NAMESPACE,
+    TARGET,
+    Platform,
+    User,
+    start_worker,
+    stop_worker,
+    wait_for,
+    wait_until,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -142,13 +152,13 @@ def test_6_order_survives_inventory_worker_outage(
     platform: Platform, admin: User, buyer: User
 ) -> None:
     product = platform.product_with_stock(admin, stock=2)
-    compose("stop", "inventory-worker")
+    stop_worker("inventory-worker")
     try:
         order_id = platform.place_order(buyer, [(product, 1)]).json()["id"]
         time.sleep(3)
         assert platform.order(buyer, order_id)["status"] == "NEW"
     finally:
-        compose("start", "inventory-worker")
+        start_worker("inventory-worker")
     platform.wait_status(buyer, order_id, "RESERVED")
 
 
@@ -201,10 +211,22 @@ def platform_api() -> str:
     return API
 
 
-def redeliver_order_created(order_id: str) -> None:
-    """Находит исходное сообщение order.created этого заказа и публикует его повторно."""
+def resend_order_created(bootstrap: str, order_id: str) -> None:
+    """Находит исходное сообщение order.created этого заказа и публикует его повторно.
+
+    Самодостаточна (импорты внутри): в k8s её исходный код выполняется в поде воркера.
+    """
+    import time
+    import uuid
+
+    from confluent_kafka import Consumer, Producer, TopicPartition
+
     consumer = Consumer(
-        {"bootstrap.servers": KAFKA, "group.id": f"e2e-{uuid.uuid4()}", "enable.auto.commit": False}
+        {
+            "bootstrap.servers": bootstrap,
+            "group.id": f"e2e-{uuid.uuid4()}",
+            "enable.auto.commit": False,
+        }
     )
     try:
         metadata = consumer.list_topics("order.created", timeout=10)
@@ -219,7 +241,7 @@ def redeliver_order_created(order_id: str) -> None:
             if message is None or message.error():
                 continue
             if message.key() == order_id.encode():
-                producer = Producer({"bootstrap.servers": KAFKA})
+                producer = Producer({"bootstrap.servers": bootstrap})
                 producer.produce(
                     "order.created",
                     key=message.key(),
@@ -231,3 +253,19 @@ def redeliver_order_created(order_id: str) -> None:
         raise AssertionError("original order.created message not found")
     finally:
         consumer.close()
+
+
+def redeliver_order_created(order_id: str) -> None:
+    if TARGET != "k8s":
+        resend_order_created(KAFKA, order_id)
+        return
+    # Брокер кластера снаружи недоступен: тот же код выполняется в поде с confluent_kafka
+    source = inspect.getsource(resend_order_created)
+    code = f"{source}\nresend_order_created('kafka:9092', {order_id!r})\n"
+    subprocess.run(  # noqa: S603 — фиксированная команда, код теста передаётся через stdin
+        ["kubectl", "-n", NAMESPACE, "exec", "-i", "deploy/order-worker", "--", "python", "-"],  # noqa: S607
+        input=code,
+        text=True,
+        check=True,
+        capture_output=True,
+    )

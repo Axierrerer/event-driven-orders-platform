@@ -31,8 +31,5 @@ htmlcov/
 # Генерируемое
 load/reports/
 
-# CI не хранится в репозитории
-.github/
-
 # Собранные зависимости Helm (make helm-check / k3d-up)
 deploy/helm/*/charts/

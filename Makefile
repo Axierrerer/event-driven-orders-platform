@@ -5,7 +5,7 @@ PACKAGES := libs/events libs/platform $(SERVICES)
 COMPOSE := docker compose
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load scan k3d-up k3d-down inject-secrets helm-check k3d-zero-downtime
+.PHONY: help doctor install lint format typecheck test test-integration dev-up dev-down dev-reset dev-logs dev-ps export-schemas check-schemas register-schemas compat-schemas proto obs-up obs-down check-alerts seed e2e load scan k3d-up k3d-down inject-secrets helm-check k3d-zero-downtime k3d-e2e
 
 help: ## Список целей
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -141,3 +141,6 @@ helm-check: ## helm lint и kubeconform для всех чартов
 
 k3d-zero-downtime: ## Под нагрузкой: scale order-service ×4 и helm upgrade — без 5xx
 	./scripts/k8s-zero-downtime.sh
+
+k3d-e2e: ## Сквозные сценарии против платформы в k3d
+	./scripts/k8s-e2e.sh

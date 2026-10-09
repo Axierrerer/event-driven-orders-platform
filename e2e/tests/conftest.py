@@ -22,6 +22,10 @@ ADMIN_PASSWORD = os.environ.get("SEED_ADMIN_PASSWORD", "local-dev-admin-passphra
 MANAGER_EMAIL = "manager@example.com"
 MANAGER_PASSWORD = os.environ.get("SEED_MANAGER_PASSWORD", "local-dev-manager-passphrase")
 TIMEOUT = 30.0
+# compose — локальный стенд; k8s — кластер (make k3d-e2e, CD): самоподписанный TLS, kubectl
+TARGET = os.environ.get("E2E_TARGET", "compose")
+NAMESPACE = os.environ.get("E2E_NAMESPACE", "orders")
+TLS_VERIFY = os.environ.get("E2E_TLS_VERIFY", "1") != "0"
 
 
 def wait_for[T](probe: Callable[[], T | None], what: str, timeout: float = TIMEOUT) -> T:
@@ -45,6 +49,29 @@ def wait_until[T](
 
 def compose(*args: str) -> None:
     subprocess.run(["docker", "compose", *args], check=True, capture_output=True)  # noqa: S603, S607
+
+
+def kubectl(*args: str) -> None:
+    subprocess.run(["kubectl", "-n", NAMESPACE, *args], check=True, capture_output=True)  # noqa: S603, S607
+
+
+def stop_worker(name: str) -> None:
+    """Остановить воркер (например, inventory-worker) и дождаться, пока он завершится."""
+    if TARGET == "k8s":
+        kubectl("scale", f"deploy/{name}", "--replicas=0")
+        service = name.replace("-worker", "-service")
+        selector = f"app.kubernetes.io/name={service},app.kubernetes.io/component=worker"
+        kubectl("wait", "--for=delete", "pod", "-l", selector, "--timeout=90s")
+    else:
+        compose("stop", name)
+
+
+def start_worker(name: str) -> None:
+    if TARGET == "k8s":
+        kubectl("scale", f"deploy/{name}", "--replicas=1")
+        kubectl("rollout", "status", f"deploy/{name}", "--timeout=120s")
+    else:
+        compose("start", name)
 
 
 @dataclass
@@ -157,7 +184,7 @@ class Platform:
 
 @pytest.fixture(scope="session")
 def platform() -> Iterator[Platform]:
-    with httpx.Client(timeout=15) as client:
+    with httpx.Client(timeout=15, verify=TLS_VERIFY) as client:
         try:
             client.get(API.rsplit("/api/", 1)[0] + "/health/ready").raise_for_status()
         except httpx.HTTPError as exc:
